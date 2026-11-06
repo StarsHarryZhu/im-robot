@@ -1,0 +1,66 @@
+# Publish the package to npm when a version tag is pushed.
+#
+# Trusted publishing: no npm token is stored in this repository. Configure it
+# once per package at https://www.npmjs.com/package/@starsharryzhu/im-robot/access
+# -> Trusted Publisher -> GitHub Actions:
+#   organization/user: StarsHarryZhu
+#   repository:        im-robot
+#   workflow filename: publish.yml
+#   environment:       (leave empty)
+# The npm CLI exchanges GitHub's OIDC token for a short-lived publish token, and
+# `--provenance` records which commit and workflow built the tarball.
+
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      - name: Check the tag matches package.json
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v$version" != "${GITHUB_REF_NAME}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match package.json v${version}" >&2
+            exit 1
+          fi
+
+      - name: Test
+        run: npm test
+
+      - name: Check whether this version is already on npm
+        id: published
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "$name@$version is already on npm; skipping the publish step."
+          fi
+
+      - name: Publish
+        if: steps.published.outputs.already != 'true'
+        run: npm publish --access public --provenance

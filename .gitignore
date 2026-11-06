@@ -1,0 +1,33 @@
+# `lib/` is deliberately NOT ignored. It is the published artifact, it is what a
+# profile's `link:` or git install resolves, and this package has no `prepare`
+# script, so nothing regenerates it on install. It is still generated: change
+# `src/` and run `node build.js`, never edit `lib/` by hand.
+!lib/
+
+# --- Dependencies -----------------------------------------------------------
+node_modules/
+
+# --- Test and type-check output ---------------------------------------------
+coverage/
+.vitest/
+*.tsbuildinfo
+
+# --- Logs -------------------------------------------------------------------
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# --- Packed tarballs --------------------------------------------------------
+*.tgz
+
+# --- Local assistant memory -------------------------------------------------
+# Private notes for one machine's coding assistant; never part of the package.
+.claude/
+
+# --- Editors and operating system ------------------------------------------
+.idea/
+.vscode/
+*.swp
+.DS_Store
+._*
+Thumbs.db

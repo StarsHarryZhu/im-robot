@@ -1,0 +1,12 @@
+# im-robot bundle layer: register the plugin as one top-level row.
+# This file is the `dsh.bundle.patch` layer (see package.json#dsh.bundle.patch),
+# used only when im-robot is installed on its own. As a sub-plugin of
+# dsh-assisstant, the parent's own patch mounts it instead, with the
+# presets it may bind to, and with `autoPush` off because it sends with
+# `imRobot.send` itself:
+#   { id: dsh-assisstant-im-robot, name: im-robot, config: { presets: [dsh-assisstant], autoPush: false } }
+# The plugin registers no tool and no prompt, so a global row changes nothing
+# for sessions that are not bound to a chat account.
+- insert:
+    - id: im-robot
+      name: '@starsharryzhu/im-robot'

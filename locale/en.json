@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "IM Robot",
+    "description": "Connects a WeChat account to a chosen session: messages from the person who scanned the login code, with their images, files, voice, and video, go into that session, and its answers come back as plain text."
+  }
+}
