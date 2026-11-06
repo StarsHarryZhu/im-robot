@@ -52,6 +52,8 @@ export interface OutboxEntry {
   context?: string
   /** When the reply was made, epoch milliseconds. */
   createdAt: number
+  /** Not to be sent before this moment, epoch milliseconds (quiet hours); absent means at once. */
+  notBefore?: number
   /** Failed sends so far. */
   failures: number
 }
@@ -115,6 +117,7 @@ function isOutboxEntry(value: unknown): value is OutboxEntry {
   return typeof entry.id === 'string' && typeof entry.text === 'string'
     && (entry.context === undefined || typeof entry.context === 'string')
     && typeof entry.createdAt === 'number' && Number.isInteger(entry.failures) && (entry.failures as number) >= 0
+    && (entry.notBefore === undefined || (typeof entry.notBefore === 'number' && Number.isFinite(entry.notBefore)))
 }
 
 /** The fields {@link normalize} fills in or drops. */

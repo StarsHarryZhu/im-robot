@@ -56,7 +56,7 @@ describe('the store', () => {
     const under = (home: string): string => join(home, 'plugin-data', 'im-robot')
     const cases: [string, string][] = [
       ['~', under(homedir())],
-      ['~/family', under(join(homedir(), 'family'))],
+      ['~/people', under(join(homedir(), 'people'))],
       ['relative/home', under(resolve('relative/home'))],
       ['   ', under(join(homedir(), '.dsh'))],
       ['', under(join(homedir(), '.dsh'))],

@@ -30,6 +30,8 @@ export interface OutboxEntry {
     context?: string;
     /** When the reply was made, epoch milliseconds. */
     createdAt: number;
+    /** Not to be sent before this moment, epoch milliseconds (quiet hours); absent means at once. */
+    notBefore?: number;
     /** Failed sends so far. */
     failures: number;
 }

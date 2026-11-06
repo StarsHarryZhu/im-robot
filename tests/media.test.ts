@@ -207,3 +207,68 @@ describe('media from the chat account', () => {
     expect(lines[2]).toBe('这张是哪天的')
   })
 })
+
+describe('files the conversation shows', () => {
+  let server: FakeIlink
+  let host: FakeHost
+  let service: ImRobot
+  beforeEach(async () => {
+    server = await fakeIlink()
+    host = fakeHost({ s1: null })
+    host.control.attachments = true
+    ;({ service } = makeService(server, host))
+    await loginAndBind(service, server, 'mom', 's1')
+  })
+  afterEach(async () => {
+    service.dispose()
+    await server.close()
+  })
+
+  const imageMessage = (query: string) => ({ from_user_id: OWNER, message_type: 1, context_token: 'c', item_list: [{ type: 2, image_item: { aeskey: KEY.toString('hex'), media: { encrypt_query_param: query } } }] })
+
+  it('puts an image into the prompt itself, after the text that names its file', async () => {
+    server.cdn.set('img', encrypted(PNG))
+    server.push(imageMessage('img'))
+    await until(() => host.prompts.length === 1, 3000, 'prompt')
+    const [text, image] = host.prompts[0]!.content
+    expect(text!.text).toContain('微信发来的图片')
+    expect(image).toMatchObject({ type: 'image', mediaType: 'image/png', name: 'image.png' })
+    expect(Buffer.from(image!.data!, 'base64').equals(PNG)).toBe(true)
+  })
+
+  it('uploads any other file to the session and attaches it by receipt, under its own name', async () => {
+    const content = Buffer.from('季度报告')
+    server.cdn.set('doc', encrypted(content))
+    server.push({ from_user_id: OWNER, message_type: 1, item_list: [{ type: 4, file_item: { file_name: '报告.pdf', media: { encrypt_query_param: 'doc', aes_key: hexKey } } }] })
+    await until(() => host.prompts.length === 1, 3000, 'prompt')
+    expect(host.uploads).toHaveLength(1)
+    expect(host.uploads[0]).toMatchObject({ sessionId: 's1', name: '报告.pdf', receiptId: 'receipt-1' })
+    expect(host.uploads[0]!.bytes.equals(content)).toBe(true)
+    expect(host.prompts[0]!.content[1]).toEqual({ type: 'file', receiptId: 'receipt-1' })
+  })
+
+  it('leaves out an image over the host\'s limit, keeping it named in the text', async () => {
+    server.cdn.set('big', encrypted(Buffer.concat([PNG, Buffer.alloc(2048)])))
+    server.push(imageMessage('big'))
+    await until(() => host.prompts.length === 1, 3000, 'prompt')
+    expect(host.prompts[0]!.content).toHaveLength(1)
+    expect(host.prompts[0]!.content[0]!.text).toContain('微信发来的图片')
+  })
+
+  it('sends the text alone when the session refuses the attachments', async () => {
+    host.control.refuseAttachments = true
+    server.cdn.set('img', encrypted(PNG))
+    server.push(imageMessage('img'))
+    await until(() => host.prompts.length === 1, 3000, 'text-only prompt')
+    expect(host.prompts[0]!.content).toHaveLength(1)
+    expect(host.warnings.some(line => line.includes('without its attachments'))).toBe(true)
+  })
+
+  it('attaches nothing on a host without the services', async () => {
+    host.control.attachments = false
+    server.cdn.set('img', encrypted(PNG))
+    server.push(imageMessage('img'))
+    await until(() => host.prompts.length === 1, 3000, 'prompt')
+    expect(host.prompts[0]!.content).toHaveLength(1)
+  })
+})

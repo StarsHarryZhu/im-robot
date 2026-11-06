@@ -13,6 +13,14 @@
  * OpenClaw config (bot agent, route tag), and debug logging; the identity
  * values are constants; errors carry the endpoint and status only, never a
  * body or token; base URLs from the server are accepted only on Tencent hosts.
+ *
+ * The stale-session retry in {@link sendTextMessage} follows
+ * `dsh-weixin-ilink` 0.10.3, `src/outbound.js` (`isStaleSession`,
+ * `sendWithStaleRetry`) (MIT License, Copyright (c) 2026 dsh-weixin
+ * contributors; full text in THIRD_PARTY_NOTICES.md): after a quiet period
+ * iLink answers `-2` with "prepare failed" or "unknown error" to a message
+ * carrying the old `context_token`, and the same message without the token
+ * goes through. Written here for this module's `post`.
  * @module im-robot/channels/wechat/api
  */
 
@@ -32,7 +40,7 @@ const ILINK_APP_ID = 'bot'
 const PROTOCOL_VERSION = '2.4.10'
 
 /** Self-declared caller identity, UA style; observability only on the server. */
-const BOT_AGENT = 'im-robot/0.2.0'
+const BOT_AGENT = 'im-robot/0.2.1'
 
 /** `bot_type` for the QR endpoints, as openclaw-weixin sends it. */
 export const BOT_TYPE = '3'
@@ -263,23 +271,52 @@ export async function getUpdates(cursor: string, options: CallOptions): Promise<
   }
 }
 
-/** Send one text message; throws on an HTTP error or a non-zero `ret`. */
+/** What `sendmessage` answers. */
+interface SendMessageResponse {
+  ret?: number
+  errcode?: number
+  errmsg?: string
+}
+
+/** The two answers iLink gives once a quiet chat's session has gone stale. */
+const STALE_SESSION_MESSAGES: ReadonlySet<string> = new Set(['prepare failed', 'unknown error'])
+
+/**
+ * Whether `sendmessage` refused only because the chat's session went stale:
+ * `-2` with one of {@link STALE_SESSION_MESSAGES}, not a real rate limit.
+ * @param response - the server's answer.
+ * @returns true for the stale-session answer.
+ */
+export function isStaleSession(response: SendMessageResponse): boolean {
+  const code = response.ret ?? response.errcode
+  return code === -2 && STALE_SESSION_MESSAGES.has((response.errmsg ?? '').trim().toLowerCase())
+}
+
+/**
+ * Send one text message; throws on an HTTP error or a non-zero `ret` or
+ * `errcode`. When the context token has gone stale, the message goes once more
+ * without it.
+ */
 export async function sendTextMessage(
   message: { to: string; text: string; contextToken?: string; clientId: string },
   options: CallOptions,
 ): Promise<void> {
-  const response = await post<{ ret?: number; errmsg?: string }>('ilink/bot/sendmessage', {
+  const attempt = (contextToken: string | undefined, clientId: string): Promise<SendMessageResponse> => post<SendMessageResponse>('ilink/bot/sendmessage', {
     msg: {
       from_user_id: '',
       to_user_id: message.to,
-      client_id: message.clientId,
+      client_id: clientId,
       message_type: MessageType.BOT,
       message_state: MESSAGE_STATE_FINISH,
       item_list: [{ type: ItemType.TEXT, text_item: { text: message.text } }],
-      ...(message.contextToken ? { context_token: message.contextToken } : {}),
+      ...(contextToken ? { context_token: contextToken } : {}),
     },
   }, options)
-  if (response.ret !== undefined && response.ret !== 0) throw new Error(`sendmessage ret=${response.ret}`)
+  let response = await attempt(message.contextToken, message.clientId)
+  // A second message needs its own client id, as the reference sends it.
+  if (message.contextToken && isStaleSession(response)) response = await attempt(undefined, `${message.clientId}-r`)
+  const code = response.ret !== undefined && response.ret !== 0 ? response.ret : response.errcode
+  if (code !== undefined && code !== 0) throw new Error(`sendmessage ret=${code}`)
 }
 
 /** Fetch the bot config for one user (its typing ticket). */

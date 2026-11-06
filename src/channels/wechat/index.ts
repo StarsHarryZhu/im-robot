@@ -25,7 +25,7 @@ import type { TypingTiming } from './typing.ts'
 
 export { DEFAULT_BASE_URL } from './api.ts'
 
-/** What a family member reads as `lastError` while the loop is not connected. */
+/** What a user reads as `lastError` while the loop is not connected. */
 export const CONNECTION_PROBLEM: Record<Exclude<MonitorHealth, 'connected'>, string> = {
   network: '连不上微信服务器，正在自动重连',
   server: '微信服务器暂时出错，正在自动重连',

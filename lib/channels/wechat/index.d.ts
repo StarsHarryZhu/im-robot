@@ -15,7 +15,7 @@ import type { LoginTiming } from './login.ts';
 import type { MonitorHealth, MonitorTiming } from './monitor.ts';
 import type { TypingTiming } from './typing.ts';
 export { DEFAULT_BASE_URL } from './api.ts';
-/** What a family member reads as `lastError` while the loop is not connected. */
+/** What a user reads as `lastError` while the loop is not connected. */
 export declare const CONNECTION_PROBLEM: Record<Exclude<MonitorHealth, 'connected'>, string>;
 /** Construction options; tests point `baseUrl` at a fake server and shorten timings. */
 export interface WechatOptions {

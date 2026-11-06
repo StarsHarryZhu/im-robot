@@ -13,6 +13,14 @@
  * OpenClaw config (bot agent, route tag), and debug logging; the identity
  * values are constants; errors carry the endpoint and status only, never a
  * body or token; base URLs from the server are accepted only on Tencent hosts.
+ *
+ * The stale-session retry in {@link sendTextMessage} follows
+ * `dsh-weixin-ilink` 0.10.3, `src/outbound.js` (`isStaleSession`,
+ * `sendWithStaleRetry`) (MIT License, Copyright (c) 2026 dsh-weixin
+ * contributors; full text in THIRD_PARTY_NOTICES.md): after a quiet period
+ * iLink answers `-2` with "prepare failed" or "unknown error" to a message
+ * carrying the old `context_token`, and the same message without the token
+ * goes through. Written here for this module's `post`.
  * @module im-robot/channels/wechat/api
  */
 /** The fixed iLink API host; login always starts here. */
@@ -152,7 +160,24 @@ export declare function pollQrStatus(qrcode: string, options: CallOptions): Prom
  * outer abort is rethrown.
  */
 export declare function getUpdates(cursor: string, options: CallOptions): Promise<GetUpdatesResponse>;
-/** Send one text message; throws on an HTTP error or a non-zero `ret`. */
+/** What `sendmessage` answers. */
+interface SendMessageResponse {
+    ret?: number;
+    errcode?: number;
+    errmsg?: string;
+}
+/**
+ * Whether `sendmessage` refused only because the chat's session went stale:
+ * `-2` with one of {@link STALE_SESSION_MESSAGES}, not a real rate limit.
+ * @param response - the server's answer.
+ * @returns true for the stale-session answer.
+ */
+export declare function isStaleSession(response: SendMessageResponse): boolean;
+/**
+ * Send one text message; throws on an HTTP error or a non-zero `ret` or
+ * `errcode`. When the context token has gone stale, the message goes once more
+ * without it.
+ */
 export declare function sendTextMessage(message: {
     to: string;
     text: string;

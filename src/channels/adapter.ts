@@ -25,12 +25,21 @@ export type AdapterLoginState =
   | { status: 'confirmed'; account: ChannelAccount }
   | { status: 'expired' | 'failed'; reason: string }
 
+/** One file an adapter saved from a message, in `ChannelLink.mediaDir`. */
+export interface InboundFile {
+  readonly kind: 'image' | 'file' | 'voice' | 'video'
+  /** Absolute path of the saved file. */
+  readonly path: string
+  readonly bytes: number
+}
+
 /**
  * One accepted inbound message: text to prompt, in which the adapter has named
- * any files it saved in `ChannelLink.mediaDir`, or a kind this version cannot read.
+ * any files it saved in `ChannelLink.mediaDir`, those files again so the
+ * service can attach them to the prompt, or a kind this version cannot read.
  */
 export type InboundMessage =
-  | { kind: 'text'; text: string }
+  | { kind: 'text'; text: string; files?: readonly InboundFile[] }
   | { kind: 'unsupported' }
 
 /** What a quick, read-only check of an account found. */
@@ -56,7 +65,7 @@ export interface ChannelLink {
   token(): Promise<string | undefined>
   /**
    * Report the receive loop's health after every poll: connected, or not with
-   * a plain-Chinese problem for the family member (the service emits a status
+   * a plain-Chinese problem for the user (the service emits a status
    * change only when this changes).
    */
   report(connected: boolean, problem?: string): void

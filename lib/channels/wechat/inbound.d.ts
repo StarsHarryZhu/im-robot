@@ -13,7 +13,8 @@
  * THIRD_PARTY_NOTICES.md.
  * Changes: accept only the person who scanned the login code, only in a private
  * chat (no `group_id`); every item of a message counts rather than the first;
- * the text names saved files, in plain Chinese, since that is all a session gets.
+ * the text names saved files, in plain Chinese, and the saved files come back
+ * too, for the service to attach to the prompt.
  * @module im-robot/channels/wechat/inbound
  */
 import type { MessageItem, WeixinMessage } from './api.ts';

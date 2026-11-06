@@ -38,7 +38,18 @@ export type TurnSignal =
     text: string;
     /** Whether the service was asked to send to the chat during this turn. */
     sent: boolean;
+    /** Where the caller routed this turn's final text, if it did: see {@link TurnRoute}. */
+    route?: TurnRoute;
 };
+/**
+ * A caller's choice for one turn's final text: `chat: true` sends it to the
+ * chat whatever started the turn, not before `notBefore` when given;
+ * `chat: false` keeps it off the chat even when a chat message started the turn.
+ */
+export interface TurnRoute {
+    chat: boolean;
+    notBefore?: number;
+}
 /** Follows turns of the sessions it is told about. */
 export declare class TurnTracker {
     private readonly turns;
@@ -53,6 +64,11 @@ export declare class TurnTracker {
     running(sessionId: string): boolean;
     /** Note that the service was asked to send to the chat during the session's open turn, if it has one. */
     markSent(sessionId: string): void;
+    /**
+     * Route the final text of the session's open turn; a later call replaces an earlier one.
+     * @returns false when no turn of the session is open.
+     */
+    setRoute(sessionId: string, route: TurnRoute): boolean;
     /** Forget a session's open turn. */
     forget(sessionId: string): void;
     /** The open turn of a session, created when the plugin joined mid-turn. */

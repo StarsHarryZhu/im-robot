@@ -52,14 +52,16 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-## dsh-weixin-ilink 0.9.1
+## dsh-weixin-ilink 0.9.1 and 0.10.3
 
-- Source: https://www.npmjs.com/package/dsh-weixin-ilink (version 0.9.1)
+- Source: https://www.npmjs.com/package/dsh-weixin-ilink (versions 0.9.1 and 0.10.3)
 - Used for how a chat account is bridged into DeepSeek Harness (ideas, not
   copied code), from its first-party files only:
-  - `src/agent-bridge.js` → `src/service.ts`
-  - `src/session-reader.js` → `src/turns.ts`
-  - `normalizeInbound` in `src/transport/ilink.js` → `src/channels/wechat/inbound.ts`
+  - `src/agent-bridge.js` → `src/service.ts` (0.9.1)
+  - `src/session-reader.js` → `src/turns.ts` (0.9.1)
+  - `normalizeInbound` in `src/transport/ilink.js` → `src/channels/wechat/inbound.ts` (0.9.1)
+  - `isStaleSession` and `sendWithStaleRetry` in `src/outbound.js` → the
+    stale-session retry in `src/channels/wechat/api.ts` (0.10.3)
 
 ```
 MIT License

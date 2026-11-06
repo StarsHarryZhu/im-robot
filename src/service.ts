@@ -39,15 +39,16 @@
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type { ChannelAdapter, ChannelAccount, ChannelLink, InboundMessage } from './channels/adapter.ts'
+import { attachmentParts } from './attach.ts'
 import { splitReply, stripMarkdown } from './reply.ts'
 import { DEFAULT_BINDING_SETTINGS, MIN_REPLY_MAX_CHARS, SEND_MODES, assertBindingId, credentialName, isMediaDir, isReplyMaxChars } from './store.ts'
 import type { BindingSettings, BindingStore, OutboxEntry, StoredBinding } from './store.ts'
 import { TurnTracker, requestIdFor } from './turns.ts'
-import type { TurnSignal } from './turns.ts'
+import type { TurnRoute, TurnSignal } from './turns.ts'
 import type {
-  AgentPresetsLike, BindingOptions, BindingStatus, Channel, CommandsLike, CredentialsLike, Diagnosis, DiagnosisCheck,
-  ImRobotOptions, ImRobotService, LoggerLike, LoginState, SessionControllerLike, SessionEventLike, SessionLike,
-  SessionProjectionsLike,
+  AgentPresetsLike, AttachmentsLike, BindingOptions, BindingStatus, Channel, CommandsLike, CredentialsLike, Diagnosis, DiagnosisCheck,
+  FileUploadsLike, ImRobotOptions, ImRobotService, LoggerLike, LoginState, PromptPart, SessionControllerLike, SessionEventLike,
+  SessionLike, SessionProjectionsLike,
 } from './types.ts'
 
 /** Default longest reply segment, in characters: one short chat message. */
@@ -59,6 +60,21 @@ export const OUTBOX_MAX_FAILURES = 3
 /** Longest wait of `reconnect` for the first poll to settle. */
 export const RECONNECT_WAIT_MS = 15_000
 
+/** Latest `notBefore` a caller may ask for: an entry waits at most this long. */
+export const MAX_HOLD_MS = OUTBOX_MAX_AGE_MS
+
+/**
+ * Check a caller's `notBefore`.
+ * @returns the moment, or undefined for none.
+ * @throws when it is not a finite number or lies more than {@link MAX_HOLD_MS} ahead.
+ */
+function notBeforeOf(value: unknown): number | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new TypeError('im-robot: notBefore must be epoch milliseconds')
+  if (value - Date.now() > MAX_HOLD_MS) throw new RangeError('im-robot: notBefore is more than 24 hours ahead')
+  return value
+}
+
 /** Plain-text notices sent to the chat account. */
 const NOTICE = {
   noReply: '（这次没有得到回复，请稍后再发一次。）',
@@ -66,7 +82,7 @@ const NOTICE = {
   promptFailed: '（消息没能交给助理，请稍后再发一次。）',
   saveFailed: '保存微信登录信息失败，请再扫一次。',
   stopped: '助理正在关闭，请稍后再试。',
-  notLoggedIn: '这个家人还没有扫码连接微信，请先扫码。',
+  notLoggedIn: '这个微信号还没有扫码连接，请先扫码。',
   notBound: '这个微信账号还没有绑定会话。',
   switchedOff: '这个微信连接已经关闭。',
 } as const
@@ -117,6 +133,10 @@ export interface ServiceHost {
   commands?: () => CommandsLike | undefined
   /** `ctx.sessionProjections` when the host has it. */
   sessionProjections?: () => SessionProjectionsLike | undefined
+  /** `ctx.attachments` when the host has it: images then go into the prompt itself. */
+  attachments?: () => AttachmentsLike | undefined
+  /** `ctx.fileUploads` when the host has it: files then go into the prompt by receipt. */
+  fileUploads?: () => FileUploadsLike | undefined
 }
 
 /** Service settings. */
@@ -215,7 +235,7 @@ export class ImRobot implements ImRobotService {
     const sessionId = target?.sessionId
     if (typeof sessionId !== 'string' || sessionId.trim() === '') throw new TypeError('im-robot: bind needs a sessionId')
     const runtime = this.bindings.get(bindingId)
-    if (runtime === undefined) throw new Error('这个家人还没有扫码连接微信，请先扫码，再绑定会话。')
+    if (runtime === undefined) throw new Error('这个微信号还没有扫码连接，请先扫码，再绑定会话。')
     const problem = await this.sessionProblem(sessionId, false)
     if (problem !== undefined) throw new Error(problem)
     if (this.bindings.get(bindingId) !== runtime) throw new Error('绑定在检查期间被解除了，请重新扫码。')
@@ -308,17 +328,30 @@ export class ImRobot implements ImRobotService {
     return this.status(bindingId)
   }
 
-  send(bindingId: string, text: string): void {
+  send(bindingId: string, text: string, options?: { notBefore?: number }): void {
+    const runtime = this.usable(bindingId)
+    const notBefore = notBeforeOf(options?.notBefore)
+    const segments = this.segmentsOf(runtime, typeof text === 'string' ? text : '')
+    if (segments.length === 0) throw new TypeError('im-robot: send needs some text')
+    this.turns.markSent(runtime.stored.sessionId!)
+    this.enqueueReply(runtime, segments, notBefore)
+  }
+
+  route(bindingId: string, route: TurnRoute): boolean {
+    if (typeof route !== 'object' || route === null || typeof route.chat !== 'boolean') throw new TypeError('im-robot: route needs { chat: boolean }')
+    const runtime = this.usable(bindingId)
+    const notBefore = notBeforeOf(route.notBefore)
+    return this.turns.setRoute(runtime.stored.sessionId!, { chat: route.chat, ...(notBefore === undefined ? {} : { notBefore }) })
+  }
+
+  /** A binding that can send now: logged in, bound, and switched on; else a plain-Chinese error. */
+  private usable(bindingId: string): Runtime {
     assertBindingId(bindingId)
     const runtime = this.bindings.get(bindingId)
     if (runtime === undefined) throw new Error(NOTICE.notLoggedIn)
-    const { sessionId } = runtime.stored
-    if (sessionId === undefined) throw new Error(NOTICE.notBound)
+    if (runtime.stored.sessionId === undefined) throw new Error(NOTICE.notBound)
     if (!this.isOn(runtime)) throw new Error(NOTICE.switchedOff)
-    const segments = this.segmentsOf(runtime, typeof text === 'string' ? text : '')
-    if (segments.length === 0) throw new TypeError('im-robot: send needs some text')
-    this.turns.markSent(sessionId)
-    this.enqueueReply(runtime, segments)
+    return runtime
   }
 
   async reconnect(bindingId: string): Promise<BindingStatus> {
@@ -647,13 +680,35 @@ export class ImRobot implements ImRobotService {
     runtime.awaiting += 1
     if (runtime.stopTyping === undefined) runtime.stopTyping = this.adapterOf(channel).startTyping(this.linkOf(runtime))
     try {
-      await this.host.sessionController.prompt({
+      const text: PromptPart = { type: 'text', text: message.text }
+      const attached = message.files === undefined ? [] : await attachmentParts(message.files, sessionId, {
+        attachments: this.host.attachments?.(),
+        fileUploads: this.host.fileUploads?.(),
+        warn: line => this.host.logger.warn(line),
+      }, signal)
+      if (signal.aborted) {
+        this.settle(runtime, 1)
+        return
+      }
+      const prompt = (content: PromptPart[]): Promise<unknown> => this.host.sessionController.prompt({
         requestId: requestIdFor(bindingId, randomUUID()),
         sessionId,
         // Steering an idle session would start a turn anyway; queueing it says so plainly.
         mode: sendMode === 'steer' && this.turns.running(sessionId) ? 'steer' : 'queue',
-        content: [{ type: 'text', text: message.text }],
+        content,
       }, signal)
+      if (attached.length === 0) {
+        await prompt([text])
+      } else {
+        try {
+          await prompt([text, ...attached])
+        } catch (error) {
+          if (signal.aborted) throw error
+          // A model without image input, or a refused attachment: the text alone still names every file.
+          this.host.logger.warn(`im-robot: binding ${bindingId} sent the message without its attachments: ${String(error)}`)
+          await prompt([text])
+        }
+      }
     } catch (error) {
       this.settle(runtime, 1)
       if (signal.aborted) return
@@ -696,21 +751,34 @@ export class ImRobot implements ImRobotService {
     return true
   }
 
-  /** Reply to the chat messages a turn consumed, or push a follow-up's or a reminder's answer. */
+  /**
+   * Reply to the chat messages a turn consumed, push a follow-up's or a
+   * reminder's answer, or follow the caller's route for the turn.
+   */
   private onTurnEnd(signal: Extract<TurnSignal, { kind: 'turn-end' }>): void {
     const answered = [...new Set(signal.bindings)]
+    const { route } = signal
     for (const bindingId of answered) {
       const runtime = this.bindings.get(bindingId)
       if (runtime === undefined) continue
       this.settle(runtime, signal.bindings.filter(id => id === bindingId).length)
       if (runtime.stored.sessionId !== signal.sessionId) continue
       this.setLastInput(runtime, true)
-      // The caller answered through `send`, so the turn's own text stays off the chat.
-      if (signal.sent) continue
+      // The caller answered through `send`, or kept this turn's text off the chat.
+      if (signal.sent || route?.chat === false) continue
       const segments = this.segmentsOf(runtime, signal.text)
-      this.enqueueReply(runtime, segments.length > 0 ? segments : [NOTICE.noReply])
+      this.enqueueReply(runtime, segments.length > 0 ? segments : [NOTICE.noReply], route?.notBefore)
     }
-    if (answered.length > 0 || !(signal.followUp || signal.reminder) || this.options.autoPush === false) return
+    if (answered.length > 0 || route?.chat === false) return
+    if (route?.chat === true) {
+      for (const runtime of this.runtimesOf(signal.sessionId)) {
+        if (!this.isOn(runtime)) continue
+        // Routed on purpose: a turn that then wrote nothing sends nothing, not the no-reply notice.
+        this.enqueueReply(runtime, this.segmentsOf(runtime, signal.text), route.notBefore)
+      }
+      return
+    }
+    if (!(signal.followUp || signal.reminder) || this.options.autoPush === false) return
     for (const runtime of this.runtimesOf(signal.sessionId)) {
       if (!runtime.stored.lastInputFromChat) continue
       // A turn that stays silent on purpose sends nothing, not the no-reply notice.
@@ -731,13 +799,14 @@ export class ImRobot implements ImRobotService {
     }
   }
 
-  /** Write a reply's segments to the outbox, then send what the outbox holds. */
-  private enqueueReply(runtime: Runtime, segments: string[]): void {
+  /** Write a reply's segments to the outbox, not to go before `notBefore` when given, then send what the outbox holds. */
+  private enqueueReply(runtime: Runtime, segments: string[], notBefore?: number): void {
     if (segments.length === 0) return
     const context = this.adapterOf(runtime.stored.channel).replyContext(this.linkOf(runtime))
     const createdAt = Date.now()
+    const deferred = notBefore !== undefined && notBefore > createdAt ? { notBefore } : {}
     const entries: OutboxEntry[] = segments.map(text => ({
-      id: randomUUID(), text, ...(context === undefined ? {} : { context }), createdAt, failures: 0,
+      id: randomUUID(), text, ...(context === undefined ? {} : { context }), createdAt, ...deferred, failures: 0,
     }))
     runtime.stored = { ...runtime.stored, outbox: [...runtime.stored.outbox, ...entries] }
     this.writeQuietly(runtime)
@@ -761,12 +830,14 @@ export class ImRobot implements ImRobotService {
     this.enqueue(runtime, async () => {
       try {
         while (live()) {
-          const fresh = runtime.stored.outbox.filter(entry => Date.now() - entry.createdAt <= OUTBOX_MAX_AGE_MS)
+          const now = Date.now()
+          const fresh = runtime.stored.outbox.filter(entry => now - (entry.notBefore ?? entry.createdAt) <= OUTBOX_MAX_AGE_MS)
           if (fresh.length < runtime.stored.outbox.length) {
             this.host.logger.warn(`${label} dropped ${runtime.stored.outbox.length - fresh.length} unsent reply segment(s) older than 24 h`)
             this.replaceOutbox(runtime, fresh)
           }
-          const entry = fresh[0]
+          // A held entry waits for its moment without holding back the ones behind it.
+          const entry = fresh.find(item => item.notBefore === undefined || item.notBefore <= now)
           if (entry === undefined) {
             this.setSendError(runtime, undefined)
             return

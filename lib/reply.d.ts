@@ -8,7 +8,7 @@
  * heading markers are dropped, fenced code keeps its content, and emphasis
  * markers are stripped while their content stays.
  * Changes: a whole-text, line-based filter instead of a streaming state
- * machine, and it strips more, because a family member's chat shows Markdown
+ * machine, and it strips more, because a user's chat shows Markdown
  * as literal symbols: every heading level, bold and italic in any script,
  * strikethrough, inline-code backticks, fence lines, block quotes, links
  * (kept as "text (url)"), table pipes and separator rows, and rules; list

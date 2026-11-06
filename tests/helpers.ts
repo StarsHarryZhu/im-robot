@@ -11,7 +11,7 @@ import type { MonitorTiming } from '../src/channels/wechat/monitor.ts'
 import { DEFAULT_REPLY_MAX_CHARS, ImRobot } from '../src/service.ts'
 import type { ServiceHost } from '../src/service.ts'
 import { BindingStore } from '../src/store.ts'
-import type { BindingStatus, CommandExecutionLike, SessionEventLike } from '../src/types.ts'
+import type { BindingStatus, CommandExecutionLike, PromptPart, SessionEventLike } from '../src/types.ts'
 
 /** A fresh canonical temporary directory. */
 export function tempDir(prefix = 'im-robot-'): string {
@@ -50,7 +50,8 @@ export interface Call {
 /**
  * A fake iLink server on 127.0.0.1. Login status answers come from a queue
  * (`wait` once empty); getupdates holds briefly for queued batches and hands
- * out cursors `buf-1`, `buf-2`, ...; sendmessage can be told to fail; getconfig
+ * out cursors `buf-1`, `buf-2`, ...; sendmessage can be told to fail, or to
+ * refuse a stale context token; getconfig
  * answers `ok`, a stale token, or HTTP 500.
  */
 export async function fakeIlink() {
@@ -61,6 +62,8 @@ export async function fakeIlink() {
   const cdn = new Map<string, Buffer>()
   const state = {
     codes: 0, cursor: 0, failQr: false, failSend: false, stale: 0, failUpdates: 0,
+    /** How many sendmessage calls carrying a context token answer that the chat's session went stale. */
+    staleSend: 0,
     /** How long an empty getupdates is held. */
     holdMs: 40,
     /** How long a sendmessage is held after it was recorded. */
@@ -113,6 +116,10 @@ export async function fakeIlink() {
           case 'ilink/bot/sendmessage':
             if (state.sendHoldMs > 0) await sleep(state.sendHoldMs)
             if (state.failSend) return reply(500, { error: 'send failed' })
+            if (state.staleSend > 0 && body?.msg?.context_token !== undefined) {
+              state.staleSend -= 1
+              return reply(200, { ret: -2, errmsg: 'prepare failed' })
+            }
             return reply(200, { ret: 0 })
           case 'ilink/bot/getconfig':
             if (state.config === 'error') return reply(500, { error: 'down' })
@@ -187,7 +194,9 @@ export type FakeCommand = (rawInput: string) => CommandExecutionLike['result']
  */
 export function fakeHost(presets: Record<string, string | null> = {}) {
   const secrets = new Map<string, string>()
-  const prompts: { requestId: string; sessionId: string; mode: string; content: { type: string; text: string }[] }[] = []
+  const prompts: { requestId: string; sessionId: string; mode: string; content: (PromptPart & { text?: string; data?: string; mediaType?: string; name?: string; receiptId?: string })[] }[] = []
+  /** Files uploaded through the fake `fileUploads`, with the bytes read from each stream. */
+  const uploads: { sessionId: string; name?: string; bytes: Buffer; receiptId: string }[] = []
   const order: string[] = []
   const warnings: string[] = []
   const statuses: [string, BindingStatus][] = []
@@ -198,6 +207,10 @@ export function fakeHost(presets: Record<string, string | null> = {}) {
     noRegistry: false,
     presetApi: 'registry' as 'registry' | 'projection' | 'none',
     failPresetRead: false,
+    /** Offer `attachments` and `fileUploads`, as hosts since 0.2.2 do. */
+    attachments: false,
+    /** Refuse a prompt carrying anything but text, as for a model without image input. */
+    refuseAttachments: false,
   }
   const projectionReads: string[] = []
   const readPreset = (session: { id: string }): string | null => {
@@ -215,6 +228,7 @@ export function fakeHost(presets: Record<string, string | null> = {}) {
       prompt: async (request) => {
         order.push(`prompt:${request.sessionId}`)
         if (control.failPrompt) throw new Error('agent busy')
+        if (control.refuseAttachments && request.content.some(part => part.type !== 'text')) throw new Error('model does not support image input')
         prompts.push(request)
         return { accepted: true }
       },
@@ -230,6 +244,18 @@ export function fakeHost(presets: Record<string, string | null> = {}) {
         return key === 'agentPreset' ? readPreset(session) : undefined
       },
     }),
+    attachments: () => (control.attachments ? {
+      imageLimits: { maxImageBytes: 1024, maxImagesPerMessage: 2, maxMessageImageBytes: 4096, mediaTypes: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] },
+    } : undefined),
+    fileUploads: () => (control.attachments ? {
+      uploadStream: async (request) => {
+        const chunks: Buffer[] = []
+        for await (const chunk of request.data) chunks.push(Buffer.from(chunk))
+        const receiptId = `receipt-${uploads.length + 1}`
+        uploads.push({ sessionId: request.sessionId, ...(request.name === undefined ? {} : { name: request.name }), bytes: Buffer.concat(chunks), receiptId })
+        return { receiptId }
+      },
+    } : undefined),
     logger: { info: () => undefined, warn: message => { warnings.push(message) } },
     credentialRef: value => credentialRef(value),
     emitStatus: (bindingId, state) => { statuses.push([bindingId, state]) },
@@ -249,7 +275,7 @@ export function fakeHost(presets: Record<string, string | null> = {}) {
       },
     }),
   }
-  return { host, secrets, prompts, order, warnings, statuses, control, commandRuns, presets, projectionReads }
+  return { host, secrets, prompts, uploads, order, warnings, statuses, control, commandRuns, presets, projectionReads }
 }
 
 export type FakeHost = ReturnType<typeof fakeHost>

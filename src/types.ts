@@ -100,10 +100,23 @@ export interface ImRobotService {
    * Send text to the account on the caller's own initiative, through the outbox
    * like a reply, split by the binding's limit, with any `<keep>` block whole.
    * A turn of the bound session that is running when this is called sends no
-   * automatic reply of its own: the caller has answered.
+   * automatic reply of its own: the caller has answered. With `notBefore`, it
+   * waits in the outbox until then (at most 24 hours ahead).
    * @throws when the binding is not logged in, not bound, switched off, or the text is empty.
    */
-  send(bindingId: string, text: string): void
+  send(bindingId: string, text: string, options?: { notBefore?: number }): void
+  /**
+   * Route the final text of the bound session's running turn: `chat: true`
+   * sends it to the account whatever started the turn (a reply to a chat
+   * message as well as a heartbeat or a host note), not before `notBefore`
+   * when given; `chat: false` keeps it off the chat, even as the answer to a
+   * chat message. A later call in the same turn replaces an earlier one.
+   * Routed text goes through the outbox like a reply; an empty one sends
+   * nothing.
+   * @returns false when no turn of the session is running, so nothing was routed.
+   * @throws like {@link send}, and when `notBefore` lies more than 24 hours ahead.
+   */
+  route(bindingId: string, route: { chat: boolean; notBefore?: number }): boolean
   /** Change runtime options. */
   setOptions(options: ImRobotOptions): void
   /** Change one logged-in binding's options, persist them, and return its new status. */
@@ -159,6 +172,38 @@ export interface PromptTextPart {
   text: string
 }
 
+/** An image a prompt carries itself: base64 bytes the host stores and normalizes on admission. */
+export interface PromptImagePart {
+  type: 'image'
+  data: string
+  mediaType: string
+  name?: string
+}
+
+/** A file a prompt carries by the receipt of an earlier upload to the same session. */
+export interface PromptFilePart {
+  type: 'file'
+  receiptId: string
+}
+
+/** One part of a prompt. */
+export type PromptPart = PromptTextPart | PromptImagePart | PromptFilePart
+
+/** `ctx.attachments`, the one field used here: what images a prompt may carry. */
+export interface AttachmentsLike {
+  readonly imageLimits: {
+    readonly maxImageBytes: number
+    readonly maxImagesPerMessage: number
+    readonly maxMessageImageBytes: number
+    readonly mediaTypes: readonly string[]
+  }
+}
+
+/** `ctx.fileUploads`, the one method used here: store a file for one session and get its receipt. */
+export interface FileUploadsLike {
+  uploadStream(request: { sessionId: string; data: AsyncIterable<Uint8Array>; name?: string; signal?: AbortSignal }): Promise<{ receiptId: string }>
+}
+
 /** An Agent as far as this plugin reads one. */
 export interface AgentLike {
   readonly session: SessionLike
@@ -167,7 +212,7 @@ export interface AgentLike {
 /** `ctx.sessionController`, the two methods used here. */
 export interface SessionControllerLike {
   prompt(
-    request: { requestId: string; sessionId: string; mode: SendMode; content: PromptTextPart[] },
+    request: { requestId: string; sessionId: string; mode: SendMode; content: PromptPart[] },
     signal: AbortSignal,
   ): Promise<unknown>
   resolveAgent(sessionId: string): Promise<{ agent: AgentLike } | { error: { message: string } }>

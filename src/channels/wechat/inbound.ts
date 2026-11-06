@@ -13,13 +13,14 @@
  * THIRD_PARTY_NOTICES.md.
  * Changes: accept only the person who scanned the login code, only in a private
  * chat (no `group_id`); every item of a message counts rather than the first;
- * the text names saved files, in plain Chinese, since that is all a session gets.
+ * the text names saved files, in plain Chinese, and the saved files come back
+ * too, for the service to attach to the prompt.
  * @module im-robot/channels/wechat/inbound
  */
 
 import { ItemType, MessageType } from './api.ts'
 import type { MessageItem, WeixinMessage } from './api.ts'
-import type { InboundMessage } from '../adapter.ts'
+import type { InboundFile, InboundMessage } from '../adapter.ts'
 import { formatBytes, mediaLabel, mediaOf } from './media.ts'
 import type { SavedMedia } from './media.ts'
 
@@ -47,16 +48,21 @@ function savedLine(saved: SavedMedia, quoted: boolean): string {
   return `（${what}${saved.name === undefined ? '' : `「${saved.name}」`}没能保存：${saved.reason}）`
 }
 
-/** @returns the lines of a quote: what it says, and where its file went. */
-async function quoteLines(item: MessageItem, save: SaveItem): Promise<string[]> {
+/** @returns the lines of a quote, what it says and where its file went, and that file once saved. */
+async function quoteLines(item: MessageItem, save: SaveItem): Promise<{ lines: string[]; saved?: SavedMedia }> {
   const ref = item.ref_msg
-  if (ref === undefined) return []
+  if (ref === undefined) return { lines: [] }
   const quoted = ref.message_item
   const body = quoted === undefined ? undefined : textOf(quoted)?.trim()
   const parts = [...new Set([ref.title?.trim(), body].filter((part): part is string => part !== undefined && part !== ''))]
   const lines = parts.length === 0 ? [] : [`（引用：${parts.join(' | ')}）`]
   const saved = quoted === undefined || mediaOf(quoted) === undefined ? undefined : await save(quoted)
-  return saved === undefined ? lines : [...lines, savedLine(saved, true)]
+  return saved === undefined ? { lines } : { lines: [...lines, savedLine(saved, true)], saved }
+}
+
+/** @returns the file a saved item became, for the prompt to carry. */
+function fileOf(saved: SavedMedia | undefined): InboundFile[] {
+  return saved?.ok === true ? [{ kind: saved.kind, path: saved.path, bytes: saved.bytes }] : []
 }
 
 /**
@@ -70,19 +76,23 @@ export async function readInbound(message: WeixinMessage, ownerId: string, save:
   if (!accepted(message, ownerId)) return undefined
   const items = message.item_list ?? []
   const lines: string[] = []
+  const files: InboundFile[] = []
   let understood = false
   for (const item of items) {
-    lines.push(...await quoteLines(item, save))
+    const quote = await quoteLines(item, save)
+    lines.push(...quote.lines)
+    files.push(...fileOf(quote.saved))
     const text = textOf(item)
     if (text !== undefined && text.trim() !== '') lines.push(text)
     if (text !== undefined) understood = true
     const saved = await save(item)
     if (saved === undefined) continue
     understood = true
+    files.push(...fileOf(saved))
     // A voice item that could not be fetched still counts by its transcript.
     if (saved.ok || text === undefined || text.trim() === '') lines.push(savedLine(saved, false))
   }
-  if (lines.length > 0) return { kind: 'text', text: lines.join('\n') }
+  if (lines.length > 0) return { kind: 'text', text: lines.join('\n'), ...(files.length === 0 ? {} : { files }) }
   return items.length > 0 && !understood ? { kind: 'unsupported' } : undefined
 }
 

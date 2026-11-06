@@ -57,7 +57,19 @@ export type TurnSignal =
     text: string
     /** Whether the service was asked to send to the chat during this turn. */
     sent: boolean
+    /** Where the caller routed this turn's final text, if it did: see {@link TurnRoute}. */
+    route?: TurnRoute
   }
+
+/**
+ * A caller's choice for one turn's final text: `chat: true` sends it to the
+ * chat whatever started the turn, not before `notBefore` when given;
+ * `chat: false` keeps it off the chat even when a chat message started the turn.
+ */
+export interface TurnRoute {
+  chat: boolean
+  notBefore?: number
+}
 
 /** Per-turn facts gathered so far. */
 interface OpenTurn {
@@ -66,6 +78,7 @@ interface OpenTurn {
   followUp: boolean
   text: string
   sent: boolean
+  route?: TurnRoute
 }
 
 /** The assistant-visible text of a message's content blocks. */
@@ -122,7 +135,10 @@ export class TurnTracker {
         const turn = this.turns.get(sessionId)
         this.turns.delete(sessionId)
         if (turn === undefined) return undefined
-        return { kind: 'turn-end', sessionId, bindings: turn.bindings, reminder: turn.reminder, followUp: turn.followUp, text: turn.text, sent: turn.sent }
+        return {
+          kind: 'turn-end', sessionId, bindings: turn.bindings, reminder: turn.reminder, followUp: turn.followUp, text: turn.text, sent: turn.sent,
+          ...(turn.route === undefined ? {} : { route: turn.route }),
+        }
       }
       default:
         return undefined
@@ -138,6 +154,17 @@ export class TurnTracker {
   markSent(sessionId: string): void {
     const turn = this.turns.get(sessionId)
     if (turn !== undefined) turn.sent = true
+  }
+
+  /**
+   * Route the final text of the session's open turn; a later call replaces an earlier one.
+   * @returns false when no turn of the session is open.
+   */
+  setRoute(sessionId: string, route: TurnRoute): boolean {
+    const turn = this.turns.get(sessionId)
+    if (turn === undefined) return false
+    turn.route = route
+    return true
   }
 
   /** Forget a session's open turn. */

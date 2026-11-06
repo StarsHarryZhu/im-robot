@@ -31,8 +31,8 @@ import { WechatAdapter } from './channels/wechat/index.ts'
 import { DEFAULT_REPLY_MAX_CHARS, ImRobot } from './service.ts'
 import { BindingStore, MIN_REPLY_MAX_CHARS, defaultDataDirectory } from './store.ts'
 import type {
-  AgentPresetsLike, BindingStatus, Channel, CommandsLike, CredentialsLike, ImRobotService, SessionControllerLike, SessionEventLike,
-  SessionLike, SessionProjectionsLike,
+  AgentPresetsLike, AttachmentsLike, BindingStatus, Channel, CommandsLike, CredentialsLike, FileUploadsLike, ImRobotService,
+  SessionControllerLike, SessionEventLike, SessionLike, SessionProjectionsLike,
 } from './types.ts'
 
 export type {
@@ -70,6 +70,8 @@ interface HostContext {
   get(name: 'agentPresets'): AgentPresetsLike | undefined
   get(name: 'commands'): CommandsLike | undefined
   get(name: 'sessionProjections'): SessionProjectionsLike | undefined
+  get(name: 'attachments'): AttachmentsLike | undefined
+  get(name: 'fileUploads'): FileUploadsLike | undefined
   provide(name: 'imRobot', value: ImRobotService): () => void
   effect(execute: () => () => void): void
   emit(name: 'im-robot/status', bindingId: string, state: BindingStatus): void
@@ -95,6 +97,8 @@ export function apply(ctx: Context, config: Config): void {
     emitInbound: (sessionId, channel) => host.parallel('im-robot/inbound', sessionId, channel),
     commands: () => host.get('commands'),
     sessionProjections: () => host.get('sessionProjections'),
+    attachments: () => host.get('attachments'),
+    fileUploads: () => host.get('fileUploads'),
   }, {
     presets: config?.presets ?? [],
     replyMaxChars: config?.replyMaxChars ?? DEFAULT_REPLY_MAX_CHARS,

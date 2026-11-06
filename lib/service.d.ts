@@ -37,7 +37,8 @@
  */
 import type { ChannelAdapter } from './channels/adapter.ts';
 import type { BindingStore } from './store.ts';
-import type { AgentPresetsLike, BindingOptions, BindingStatus, Channel, CommandsLike, CredentialsLike, Diagnosis, ImRobotOptions, ImRobotService, LoggerLike, LoginState, SessionControllerLike, SessionEventLike, SessionProjectionsLike } from './types.ts';
+import type { TurnRoute } from './turns.ts';
+import type { AgentPresetsLike, AttachmentsLike, BindingOptions, BindingStatus, Channel, CommandsLike, CredentialsLike, Diagnosis, FileUploadsLike, ImRobotOptions, ImRobotService, LoggerLike, LoginState, SessionControllerLike, SessionEventLike, SessionProjectionsLike } from './types.ts';
 /** Default longest reply segment, in characters: one short chat message. */
 export declare const DEFAULT_REPLY_MAX_CHARS = 100;
 /** An outbox entry older than this is dropped instead of sent. */
@@ -46,6 +47,8 @@ export declare const OUTBOX_MAX_AGE_MS: number;
 export declare const OUTBOX_MAX_FAILURES = 3;
 /** Longest wait of `reconnect` for the first poll to settle. */
 export declare const RECONNECT_WAIT_MS = 15000;
+/** Latest `notBefore` a caller may ask for: an entry waits at most this long. */
+export declare const MAX_HOLD_MS: number;
 /** Host services the service uses. */
 export interface ServiceHost {
     credentials: CredentialsLike;
@@ -63,6 +66,10 @@ export interface ServiceHost {
     commands?: () => CommandsLike | undefined;
     /** `ctx.sessionProjections` when the host has it. */
     sessionProjections?: () => SessionProjectionsLike | undefined;
+    /** `ctx.attachments` when the host has it: images then go into the prompt itself. */
+    attachments?: () => AttachmentsLike | undefined;
+    /** `ctx.fileUploads` when the host has it: files then go into the prompt by receipt. */
+    fileUploads?: () => FileUploadsLike | undefined;
 }
 /** Service settings. */
 export interface ServiceOptions {
@@ -103,7 +110,12 @@ export declare class ImRobot implements ImRobotService {
     unbind(bindingId: string): Promise<void>;
     status(bindingId: string): BindingStatus;
     setBindingOptions(bindingId: string, options: BindingOptions): BindingStatus;
-    send(bindingId: string, text: string): void;
+    send(bindingId: string, text: string, options?: {
+        notBefore?: number;
+    }): void;
+    route(bindingId: string, route: TurnRoute): boolean;
+    /** A binding that can send now: logged in, bound, and switched on; else a plain-Chinese error. */
+    private usable;
     reconnect(bindingId: string): Promise<BindingStatus>;
     diagnose(bindingId: string): Promise<Diagnosis>;
     setOptions(options: ImRobotOptions): void;
@@ -156,11 +168,14 @@ export declare class ImRobot implements ImRobotService {
      *   that name, so the line is prompted as text (skills are invoked that way).
      */
     private runCommand;
-    /** Reply to the chat messages a turn consumed, or push a follow-up's or a reminder's answer. */
+    /**
+     * Reply to the chat messages a turn consumed, push a follow-up's or a
+     * reminder's answer, or follow the caller's route for the turn.
+     */
     private onTurnEnd;
     /** Count `count` prompted messages as answered; clear "typing" when none is left. */
     private settle;
-    /** Write a reply's segments to the outbox, then send what the outbox holds. */
+    /** Write a reply's segments to the outbox, not to go before `notBefore` when given, then send what the outbox holds. */
     private enqueueReply;
     /**
      * Send the outbox in order after anything already queued for the binding.

@@ -11,7 +11,7 @@
  * Changes: an async generator instead of a start/wait pair over a shared map;
  * no terminal QR drawing and no stdin verify-code prompt (a code that needs
  * one ends the login with a reason); no local token list is sent; messages
- * are plain Chinese for a family member; the server's hosts pass through
+ * are plain Chinese for the user; the server's hosts pass through
  * `trustedBaseUrl`; timings are injectable for tests.
  * @module im-robot/channels/wechat/login
  */

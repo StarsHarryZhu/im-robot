@@ -135,3 +135,111 @@ describe('sending before the account ever wrote', () => {
     expect(server.to('sendmessage').at(-1)?.body.msg.context_token).toBe('ctx-first')
   })
 })
+
+describe('a chat whose session went stale', () => {
+  let server: FakeIlink
+  let host: FakeHost
+  let service: ImRobot
+  let store: BindingStore
+  beforeEach(async () => {
+    server = await fakeIlink()
+    host = fakeHost({ s1: null })
+    ;({ service, store } = makeService(server, host, { autoPush: false }))
+    await loginAndBind(service, server, 'mom', 's1')
+    server.push(textFrom(OWNER, 'hi', 'ctx-old'))
+    await until(() => host.prompts.length === 1, 3000, 'prompt')
+    runTurn(service, 's1', [fromPrompt(host.prompts[0]!.requestId)], '好')
+    await until(() => server.sent().length === 1, 3000, 'reply')
+  })
+  afterEach(async () => {
+    service.dispose()
+    await server.close()
+  })
+
+  it('sends once more without the old context token, under a new client id', async () => {
+    server.state.staleSend = 1
+    service.send('mom', '一天后的提醒')
+    await until(() => server.to('sendmessage').length === 3, 3000, 'retry')
+    const [stale, retry] = server.to('sendmessage').slice(1)
+    expect(stale!.body.msg.context_token).toBe('ctx-old')
+    expect(retry!.body.msg.context_token).toBeUndefined()
+    expect(retry!.body.msg.client_id).toBe(`${stale!.body.msg.client_id}-r`)
+    await until(() => store.read('mom', () => undefined)?.outbox.length === 0, 3000, 'outbox emptied')
+    expect(service.status('mom').lastError).toBeUndefined()
+  })
+})
+
+describe('routing a turn', () => {
+  let server: FakeIlink
+  let host: FakeHost
+  let service: ImRobot
+  let store: BindingStore
+  beforeEach(async () => {
+    server = await fakeIlink()
+    host = fakeHost({ s1: null })
+    ;({ service, store } = makeService(server, host, { autoPush: false, replyMaxChars: 50 }))
+    await loginAndBind(service, server, 'mom', 's1')
+  })
+  afterEach(async () => {
+    service.dispose()
+    await server.close()
+  })
+
+  /** Run a turn some host note started, with `route` called in the middle. */
+  const routedTurn = (reply: string, route?: Parameters<ImRobot['route']>[1]): boolean | undefined => {
+    service.observe('s1', { type: 'turn/start', data: { turn: 1 } })
+    service.observe('s1', { type: 'user/message', data: { source: { kind: 'host-note', plugin: 'p' } } })
+    const routed = route === undefined ? undefined : service.route('mom', route)
+    service.observe('s1', { type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text: reply }] } } })
+    service.observe('s1', { type: 'turn/end', data: { turn: 1 } })
+    return routed
+  }
+
+  it('sends a host note\'s answer to the chat when routed there, whoever spoke last', async () => {
+    service.observe('s1', { type: 'user/message', data: { source: { kind: 'user', rpcId: 'web-1' } } })
+    expect(routedTurn('该吃药了', { chat: true })).toBe(true)
+    await until(() => server.sent().length === 1, 3000, 'routed')
+    expect(server.sent()).toEqual(['该吃药了'])
+    routedTurn('只留在网页')
+    await sleep(80)
+    expect(server.sent()).toEqual(['该吃药了'])
+  })
+
+  it('keeps the answer to a chat message off the chat when routed away, and clears typing', async () => {
+    server.push(textFrom(OWNER, 'hi'))
+    await until(() => host.prompts.length === 1, 3000, 'prompt')
+    service.observe('s1', { type: 'turn/start', data: { turn: 1 } })
+    service.observe('s1', { type: 'user/message', data: { ...fromPrompt(host.prompts[0]!.requestId) } })
+    expect(service.route('mom', { chat: false })).toBe(true)
+    service.observe('s1', { type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text: '很长的表格' }] } } })
+    service.observe('s1', { type: 'turn/end', data: { turn: 1 } })
+    await until(() => server.to('sendtyping').some(call => call.body.status === 2), 3000, 'typing cleared')
+    await sleep(60)
+    expect(server.sent()).toEqual([])
+  })
+
+  it('holds a routed answer until its moment, without holding back what comes after it', async () => {
+    routedTurn('早上好', { chat: true, notBefore: Date.now() + 400 })
+    await until(() => store.read('mom', () => undefined)?.outbox.length === 1, 3000, 'held')
+    expect(store.read('mom', () => undefined)?.outbox[0]?.notBefore).toBeGreaterThan(Date.now())
+    service.send('mom', '现在就发')
+    await until(() => server.sent().length === 1, 3000, 'later one first')
+    expect(server.sent()).toEqual(['现在就发'])
+    await until(() => server.sent().length === 2, 3000, 'held one at its moment')
+    expect(server.sent()).toEqual(['现在就发', '早上好'])
+  })
+
+  it('sends nothing for a routed turn without text, and routes nothing outside a turn', async () => {
+    routedTurn('', { chat: true })
+    expect(service.route('mom', { chat: true })).toBe(false)
+    await sleep(80)
+    expect(server.sent()).toEqual([])
+  })
+
+  it('refuses bad routes and holds longer than a day', () => {
+    expect(() => service.route('mom', {} as never)).toThrow(/chat/u)
+    expect(() => service.route('nobody', { chat: true })).toThrow(/扫码/u)
+    expect(() => service.route('mom', { chat: true, notBefore: Date.now() + 25 * 3_600_000 })).toThrow(/24 hours/u)
+    expect(() => service.send('mom', 'hi', { notBefore: Number.NaN })).toThrow(/epoch/u)
+  })
+})

@@ -640,7 +640,7 @@ describe('diagnose', () => {
   })
 
   it('answers for a binding that is not logged in or not bound', async () => {
-    expect(await service.diagnose('dad')).toEqual({ ok: false, checks: [{ label: '微信登录信息', ok: false, detail: '这个家人还没有扫码连接微信，请先扫码。' }] })
+    expect(await service.diagnose('dad')).toEqual({ ok: false, checks: [{ label: '微信登录信息', ok: false, detail: '这个微信号还没有扫码连接，请先扫码。' }] })
     server.qrStatuses.push(confirmed())
     await collect(service.login('dad', 'wechat'))
     expect((await service.diagnose('dad')).checks[3]).toEqual({ label: '绑定的会话', ok: false, detail: '还没有绑定会话' })

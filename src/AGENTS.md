@@ -15,6 +15,9 @@ The plugin source, compiled by `build.js` into `lib/`. The entry provides the `i
 - `reconnect` replaces the receive loop (only the new loop's reports count) and waits for its first report, at most `RECONNECT_WAIT_MS`; it never logs in. `diagnose` reads only, through the adapter's `probe`, the credential, the session lookup, and the outbox, and clears `lastError` only when every check passes.
 - `lastInboundAt` / `lastOutboundAt` are persisted with the binding but left out of the change check, so they never emit `im-robot/status` on their own.
 - Follow-up sources (`subagent-settled`, `agent-message`, `team-message`, `host-note`) and reminders are answered on the chat only while `autoPush` is on and `lastInputFromChat` holds, and a turn with no text sends nothing. `send` needs neither; a turn it ran during sends nothing by itself.
+- `route` decides for the running turn and overrides all of that: `chat: true` sends its final text through the outbox whatever started the turn, `chat: false` keeps even the answer to a chat message off the chat (typing still clears). A routed turn with no text sends nothing, not the no-reply notice.
+- `notBefore` (from `send` or `route`, at most 24 hours ahead) holds an outbox entry until then without holding back the entries behind it; its 24-hour age counts from that moment.
+- A message's saved files go into the prompt after its text: images as image parts the host stores and normalizes (within `ctx.attachments.imageLimits`), other files up to `MAX_ATTACHED_FILE_BYTES` by a `ctx.fileUploads.uploadStream` receipt. Both services are read lazily with `ctx.get` and optional, since 0.2.1-rc.5 is untested with them and a missing injection makes a 0.2.2 host reject the plugin. A file that cannot be attached is only named in the text; a prompt refused with attachments (a model without image input) goes again as text alone.
 - The `im-robot/inbound` listeners are awaited before the prompt; a failing listener is logged, never blocks the prompt.
 - Outgoing messages of one binding are sent in order. Final replies go through the persisted outbox (retried after the next successful poll, dropped after 24 hours or more than three failures); so do follow-up answers and `send`; notices and reminder pushes are sent once and never retried. An entry with no reply context, on a binding that has none yet, waits for the account's first message instead of counting failures.
 - `status` reports `connected` from the adapter's health reports and `lastError` as plain Chinese; `im-robot/status` is emitted only when the reported status changes.
@@ -28,8 +31,9 @@ The plugin source, compiled by `build.js` into `lib/`. The entry provides the `i
 
 - `index.ts` — plugin entry: name, injections, config schema, and `apply`.
 - `types.ts` — the public service contract (with binding options and diagnosis shapes), event typings, and structural host types.
-- `service.ts` — the `imRobot` service: logins, bindings, delivery, steering, commands, replies, follow-ups, and `send` through the outbox, reminders, connection status, reconnect, diagnose, options.
-- `turns.ts` — turn tracking over `session/event`, follow-up sources, and the request-id scheme for bindings.
+- `service.ts` — the `imRobot` service: logins, bindings, delivery, steering, commands, replies, follow-ups, `send` and `route` through the outbox, held entries, reminders, connection status, reconnect, diagnose, options.
+- `attach.ts` — the prompt parts for a message's saved files: inline images and uploaded files, with the names their cards show.
+- `turns.ts` — turn tracking over `session/event`, follow-up sources, each turn's route, and the request-id scheme for bindings.
 - `reply.ts` — Markdown stripping, reply splitting by sentence and clause marks, and `<keep>` blocks.
 - `store.ts` — binding ids, credential names, the data directory under the host's DSH home, the state files with their option defaults, media folder check, and the outbox entry shape.
 - `channels` — the adapter seam and the WeChat adapter.
@@ -37,5 +41,6 @@ The plugin source, compiled by `build.js` into `lib/`. The entry provides the `i
 ## 4. Progress
 
 - Done: everything the first version needs, including follow-up pushes and host notes, covered by the specs.
-- Open: not yet exercised inside a real host.
+- Done (2026-11-06, after the user reported proactive messages never arriving): a message to a chat quiet for a day was refused as stale and dropped after its retries; the adapter now sends it again without the old context token. `route` lets the caller decide where each turn's text goes, `notBefore` holds an entry until quiet hours end, and received images and files are attached to the prompt so the conversation view shows them.
+- Open: the stale-session retry and the attachments are checked against fakes only, not against the real iLink server or host.
 - Goal later: nothing planned beyond new channels.

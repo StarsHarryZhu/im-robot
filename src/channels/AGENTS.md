@@ -9,7 +9,7 @@ Chat platforms behind one seam. `adapter.ts` defines what the service needs from
 - An adapter never stores secrets itself: the token comes from `link.token()` on every call.
 - An adapter accepts only the person who logged in, in a private chat.
 - What the person sends is saved only in `link.mediaDir`, under names that cannot leave it.
-- Login reasons are plain Chinese for a family member; protocol details go to the log only.
+- Login reasons are plain Chinese for the user; protocol details go to the log only.
 - `startTyping` never throws; failures there are cosmetic.
 - `probe` never throws and changes nothing: one lightweight authenticated call, reported as reachable or not, the secret accepted, refused, or unknown, and a plain-Chinese problem.
 - `receive` never ends on its own: it reconnects with backoff and reports `link.report(connected, problem)` after every poll, with `problem` in plain Chinese.
@@ -23,4 +23,4 @@ Chat platforms behind one seam. `adapter.ts` defines what the service needs from
 
 - Done: the seam and the WeChat adapter.
 - Open: no second platform yet.
-- Goal later: more platforms when the family needs them.
+- Goal later: more platforms when users need them.
