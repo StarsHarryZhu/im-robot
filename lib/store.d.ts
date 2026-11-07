@@ -58,6 +58,15 @@ export interface StoredBinding {
     lastInboundAt?: number;
     /** When the latest message to the account was sent, epoch milliseconds. */
     lastOutboundAt?: number;
+    /** The latest failed send: when, and what the platform said, for diagnosis. */
+    lastSendFailure?: SendFailure;
+}
+/** One failed send as kept for diagnosis. */
+export interface SendFailure {
+    /** Epoch milliseconds. */
+    at: number;
+    /** The error, as the adapter worded it: a code and the server's message, never a secret. */
+    error: string;
 }
 /** Throw unless `bindingId` is a valid binding id. */
 export declare function assertBindingId(bindingId: unknown): asserts bindingId is string;

@@ -49,7 +49,10 @@ export interface BindingOptions {
  * global switch is off; `replyMaxChars` is the limit in effect, its own or the
  * global one; `lastInboundAt` and `lastOutboundAt` are epoch milliseconds of
  * the latest message from and to the account, and changing only them does not
- * emit `im-robot/status`.
+ * emit `im-robot/status`; `windowClosesAt` is when the platform stops taking
+ * messages the account has not answered (WeChat: a day after their latest
+ * message), absent before their first message or on a platform without such a
+ * limit.
  */
 export interface BindingStatus {
   bound: boolean
@@ -63,6 +66,7 @@ export interface BindingStatus {
   replyMaxChars: number
   lastInboundAt?: number
   lastOutboundAt?: number
+  windowClosesAt?: number
 }
 
 /** One line of a {@link Diagnosis}, in plain Chinese. */

@@ -50,8 +50,8 @@ export interface Call {
 /**
  * A fake iLink server on 127.0.0.1. Login status answers come from a queue
  * (`wait` once empty); getupdates holds briefly for queued batches and hands
- * out cursors `buf-1`, `buf-2`, ...; sendmessage can be told to fail, or to
- * refuse a stale context token; getconfig
+ * out cursors `buf-1`, `buf-2`, ...; sendmessage can be told to fail, to
+ * refuse a stale context token, or to refuse everything; getconfig
  * answers `ok`, a stale token, or HTTP 500.
  */
 export async function fakeIlink() {
@@ -64,6 +64,8 @@ export async function fakeIlink() {
     codes: 0, cursor: 0, failQr: false, failSend: false, stale: 0, failUpdates: 0,
     /** How many sendmessage calls carrying a context token answer that the chat's session went stale. */
     staleSend: 0,
+    /** Answer every sendmessage `-2`, with a context token or without: the chat takes nothing until the person writes. */
+    refuseSend: false,
     /** How long an empty getupdates is held. */
     holdMs: 40,
     /** How long a sendmessage is held after it was recorded. */
@@ -116,6 +118,7 @@ export async function fakeIlink() {
           case 'ilink/bot/sendmessage':
             if (state.sendHoldMs > 0) await sleep(state.sendHoldMs)
             if (state.failSend) return reply(500, { error: 'send failed' })
+            if (state.refuseSend) return reply(200, { ret: -2, errmsg: 'prepare failed' })
             if (state.staleSend > 0 && body?.msg?.context_token !== undefined) {
               state.staleSend -= 1
               return reply(200, { ret: -2, errmsg: 'prepare failed' })

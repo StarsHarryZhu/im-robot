@@ -17,7 +17,10 @@
  *    written to the binding's outbox on disk, and sent; a sent segment leaves the outbox, a
  *    failed one is retried after the next successful poll (so after a
  *    reconnect or a restart) while it is under 24 hours old and has failed at
- *    most three times;
+ *    most three times; when only the account's next message can let it through
+ *    (it never wrote, or the platform refused until it writes again, as WeChat
+ *    does a day after its last message), the outbox waits for that message,
+ *    uncounted, and then goes out in its context;
  * 4. when a turn without chat input ends and the session's latest human input
  *    came from the chat account, its answer is pushed too, unless `autoPush` is
  *    off: a follow-up's (a worker's report, an agent or team message, or a host
@@ -38,6 +41,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
+import { ChatRefusedError } from './channels/adapter.ts'
 import type { ChannelAdapter, ChannelAccount, ChannelLink, InboundMessage } from './channels/adapter.ts'
 import { attachmentParts } from './attach.ts'
 import { splitReply, stripMarkdown } from './reply.ts'
@@ -105,6 +109,7 @@ const CHECK = {
 const PROBLEM = {
   sendFailed: '回复没能发到微信，会自动重试',
   dropped: '有回复多次没能发到微信，已经放弃',
+  waitingForMessage: '微信暂时不让助理先发消息（多半是超过一天没在微信里说话），在微信里回一句，没发出去的就会补发',
   receiveStopped: '绑定信息不完整，请重新绑定',
 } as const
 
@@ -174,11 +179,12 @@ interface Runtime {
   /** `reconnect` calls waiting for the receive loop's next health report. */
   reportWaiters: (() => void)[]
   /**
-   * A send failed before the account ever sent a message, so there is no reply
-   * context to send in. The outbox waits for one instead of failing until it
-   * gives up.
+   * Only the account's next message can let the outbox through: a send failed
+   * before it ever wrote (no reply context yet), or the platform refused one
+   * until it writes again. The outbox waits for that message instead of
+   * failing until it gives up.
    */
-  awaitingContext: boolean
+  awaitingMessage: boolean
 }
 
 /** The `imRobot` service implementation. */
@@ -277,6 +283,7 @@ export class ImRobot implements ImRobotService {
     if (runtime === undefined) return { bound: false, connected: false, ...DEFAULT_BINDING_SETTINGS, replyMaxChars: this.replyMaxChars }
     const { stored } = runtime
     const lastError = runtime.connectionError ?? runtime.sendError
+    const window = this.adapters.get(stored.channel)?.replyWindowMs
     return {
       bound: true,
       user: stored.user,
@@ -289,6 +296,7 @@ export class ImRobot implements ImRobotService {
       replyMaxChars: this.replyLimitOf(runtime),
       ...(stored.lastInboundAt === undefined ? {} : { lastInboundAt: stored.lastInboundAt }),
       ...(stored.lastOutboundAt === undefined ? {} : { lastOutboundAt: stored.lastOutboundAt }),
+      ...(window === undefined || stored.lastInboundAt === undefined ? {} : { windowClosesAt: stored.lastInboundAt + window }),
     }
   }
 
@@ -419,9 +427,13 @@ export class ImRobot implements ImRobotService {
 
     const pending = runtime.stored.outbox.length
     const failed = runtime.stored.outbox.filter(entry => entry.failures > 0).length
-    checks.push(failed > 0
-      ? { label: CHECK.outbox, ok: false, detail: `还有 ${pending} 条回复没发出去，其中 ${failed} 条发送失败过，会在连上后自动补发` }
-      : { label: CHECK.outbox, ok: true, ...(pending === 0 ? {} : { detail: `还有 ${pending} 条回复正在发送` }) })
+    const failure = runtime.stored.lastSendFailure
+    const said = failure === undefined ? '' : `（上次失败：${new Date(failure.at).toLocaleString('zh-CN', { hour12: false })}，${failure.error}）`
+    checks.push(runtime.awaitingMessage && pending > 0
+      ? { label: CHECK.outbox, ok: false, detail: `还有 ${pending} 条消息在等你在微信里说话：微信暂时不让助理先发，你回一句就会补发${said}` }
+      : failed > 0
+        ? { label: CHECK.outbox, ok: false, detail: `还有 ${pending} 条回复没发出去，其中 ${failed} 条发送失败过，会在连上后自动补发${said}` }
+        : { label: CHECK.outbox, ok: true, ...(pending === 0 ? {} : { detail: `还有 ${pending} 条回复正在发送` }) })
 
     const ok = checks.every(check => check.ok)
     if (ok && this.bindings.get(bindingId) === runtime) {
@@ -581,7 +593,7 @@ export class ImRobot implements ImRobotService {
 
   /** A runtime for a stored binding, not yet receiving. */
   private newRuntime(stored: StoredBinding): Runtime {
-    return { stored, awaiting: 0, chain: Promise.resolve(), flushing: false, connected: false, reportWaiters: [], awaitingContext: false }
+    return { stored, awaiting: 0, chain: Promise.resolve(), flushing: false, connected: false, reportWaiters: [], awaitingMessage: false }
   }
 
   /** Whether a binding may send and receive: the global switch and its own are both on. */
@@ -645,7 +657,7 @@ export class ImRobot implements ImRobotService {
     runtime.connected = connected
     runtime.connectionError = connected ? undefined : problem
     if (this.statusKey(runtime) !== before) this.emitStatus(runtime.stored.bindingId)
-    if (connected && runtime.stored.outbox.length > 0 && !runtime.awaitingContext) this.flushOutbox(runtime)
+    if (connected && runtime.stored.outbox.length > 0 && !runtime.awaitingMessage) this.flushOutbox(runtime)
   }
 
   /** Hand one accepted chat message to the bound session. */
@@ -658,9 +670,11 @@ export class ImRobot implements ImRobotService {
       ...(message.kind === 'text' ? { lastInputFromChat: true } : {}),
     }
     this.writeQuietly(runtime)
-    if (runtime.awaitingContext) {
-      // The adapter stored this message's reply context before handing it over.
-      runtime.awaitingContext = false
+    if (runtime.awaitingMessage) {
+      // The adapter stored this message's reply context before handing it over;
+      // what waited goes out in it, not in the context that was refused.
+      runtime.awaitingMessage = false
+      this.replaceOutbox(runtime, runtime.stored.outbox.map(({ context: _refused, ...entry }) => entry))
       this.flushOutbox(runtime)
     }
     if (message.kind === 'unsupported') {
@@ -810,7 +824,8 @@ export class ImRobot implements ImRobotService {
     }))
     runtime.stored = { ...runtime.stored, outbox: [...runtime.stored.outbox, ...entries] }
     this.writeQuietly(runtime)
-    this.flushOutbox(runtime)
+    // While the account's next message is awaited, a try now would only be refused again.
+    if (!runtime.awaitingMessage) this.flushOutbox(runtime)
   }
 
   /**
@@ -846,10 +861,18 @@ export class ImRobot implements ImRobotService {
             await adapter.send(link, entry.text, entry.context)
           } catch (error) {
             if (!live()) return
+            this.noteFailure(runtime, error)
             if (entry.context === undefined && adapter.replyContext(link) === undefined) {
               // Nothing wrong with this entry: the account has not written yet, and its first message brings a context.
               this.host.logger.warn(`${label} has no reply context yet, so the outbox waits for the account's first message: ${String(error)}`)
-              runtime.awaitingContext = true
+              runtime.awaitingMessage = true
+              return
+            }
+            if (this.refusedUntilMessage(runtime, error)) {
+              // Retrying cannot help; the account's next message reopens the chat, and the outbox goes out then.
+              this.host.logger.warn(`${label} was refused until the account writes again, so the outbox waits for its next message: ${String(error)}`)
+              runtime.awaitingMessage = true
+              this.setSendError(runtime, PROBLEM.waitingForMessage)
               return
             }
             const failures = entry.failures + 1
@@ -872,6 +895,25 @@ export class ImRobot implements ImRobotService {
         runtime.flushing = false
       }
     })
+  }
+
+  /**
+   * Whether a failed send can only go through after the account's next
+   * message: the adapter said so, or the platform's reply window has closed
+   * since the account last wrote.
+   */
+  private refusedUntilMessage(runtime: Runtime, error: unknown): boolean {
+    if (error instanceof ChatRefusedError) return true
+    const window = this.adapterOf(runtime.stored.channel).replyWindowMs
+    const last = runtime.stored.lastInboundAt
+    return window !== undefined && last !== undefined && Date.now() - last >= window
+  }
+
+  /** Keep the latest failed send in the state file, so it can be read after a restart. */
+  private noteFailure(runtime: Runtime, error: unknown): void {
+    const text = error instanceof Error ? error.message : String(error)
+    runtime.stored = { ...runtime.stored, lastSendFailure: { at: Date.now(), error: text.slice(0, 300) } }
+    this.writeQuietly(runtime)
   }
 
   /**

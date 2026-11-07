@@ -13,7 +13,8 @@ The WeChat adapter over Tencent iLink (`https://ilinkai.weixin.qq.com`). It logs
 - The first poll of each loop has a short client timeout (`firstPollMs`, 5 s), so a start or a reconnect reports its health within seconds; a client timeout counts as connected, as upstream treats the end of a long poll.
 - `probe` reads only: `getconfig` with the token; `-14` means the token is refused; any other non-zero code leaves the token's state unknown.
 - Failed polls back off from 2 s, doubling up to 5 min; a stale token (`-14`) or a missing credential reports `expired` and waits an hour, as upstream pauses; the loop ends only on abort. `CONNECTION_PROBLEM` holds the plain-Chinese texts for `network`, `server`, and `expired`.
-- `send` uses the `context_token` an outbox entry recorded, falling back to the latest one. When iLink answers `-2` with "prepare failed" or "unknown error" (the chat's session went stale after a quiet period), the message goes once more without the token, under a new client id, as `dsh-weixin-ilink` 0.10.3 does. Any other non-zero `ret` or `errcode` is a failure.
+- `send` uses the `context_token` an outbox entry recorded, falling back to the latest one. When iLink answers `-2` with "prepare failed" or "unknown error" (the chat's session went stale after a quiet period), the message goes once more without the token, under a new client id, as `dsh-weixin-ilink` 0.10.3 does. A `-2` that remains throws `ChatRefusedError`; any other non-zero `ret` or `errcode` is a plain failure. Errors carry the code and iLink's `errmsg`, never a token.
+- `replyWindowMs` is a day (`REPLY_WINDOW_MS`): third-party bridges describe iLink refusing the bot's messages a day after the person's last one, and on the user's Desktop sends 5 hours after it arrived while sends 33 and 38 hours after it did not.
 - A media URL from the server is used only on an https Tencent host or the configured CDN; a download stops at 100 MB and 120 s; failures reach the session as plain Chinese, without URLs or keys. Voice stays raw SILK, and its text is iLink's transcript.
 - Every adapted file states its upstream file, the MIT license, and the changes at the top.
 - Timings are injectable through `WechatOptions` so specs run in milliseconds; the defaults follow upstream.
@@ -35,5 +36,6 @@ The WeChat adapter over Tencent iLink (`https://ilinkai.weixin.qq.com`). It logs
 - Open: never run against the real service; the protocol identity headers report openclaw-weixin 2.4.10 and are untested with the real server.
 - Done (2026-11-05): images, files, voice, video, and quotes, with specs against a fake server and CDN.
 - Done (2026-11-06): the stale-session retry of `sendmessage`, with a fake server that refuses a stale token.
+- Done (2026-11-07): a remaining `-2` is a `ChatRefusedError`, and the adapter states its one-day reply window.
 - Known limits: no sending of media, no group chats, no voice transcoding; `need_verifycode` ends the login.
 - Goal later: sending media.

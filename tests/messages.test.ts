@@ -308,7 +308,7 @@ describe('the cursor and options', () => {
     const before = server.to('getupdates').length
     const second = makeService(server, host, { directory: first.directory })
     second.service.start()
-    expect(second.service.status('mom')).toEqual({ bound: true, user: 'own***56@im.wechat', sessionId: 's1', connected: false, sendMode: 'queue', commands: true, enabled: true, replyMaxChars: 100, lastInboundAt: expect.any(Number) })
+    expect(second.service.status('mom')).toEqual({ bound: true, user: 'own***56@im.wechat', sessionId: 's1', connected: false, sendMode: 'queue', commands: true, enabled: true, replyMaxChars: 100, lastInboundAt: expect.any(Number), windowClosesAt: expect.any(Number) })
     await until(() => server.to('getupdates').length > before, 3000, 'resumed polling')
     expect(server.to('getupdates')[before]?.body.get_updates_buf).toBe('buf-1')
     server.push(textFrom(OWNER, 'two'))

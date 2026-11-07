@@ -69,7 +69,7 @@ interface BindingStatus {
 - `bindingId`：1–64 个字母、数字、`_` 或 `-`，以字母或数字开头。总包用用户的 id。只差大小写的两个 id 在 macOS 上会共用一个状态文件，请统一用小写。
 - `bind`：要先登录过。配置了 `presets` 时，会话的 preset 不在列表里就抛错。新版宿主用 `agentPresets.presetForSession` 读 preset，0.2.1-rc.5 这样没有该方法的宿主读 `sessionProjections.stateOf(session, 'agentPreset')`；读不到按没有 preset 处理。
 - `unbind`：停止收消息，删掉凭据和状态文件。
-- `status`：`connected` 表示正在正常收消息；`lastError` 是最近一个还没解决的问题，用中文白话写，例如「微信登录已失效，请重新绑定」「连不上微信服务器，正在自动重连」「回复没能发到微信，会自动重试」。问题解决后会清掉。
+- `status`：`connected` 表示正在正常收消息；`lastError` 是最近一个还没解决的问题，用中文白话写，例如「微信登录已失效，请重新绑定」「连不上微信服务器，正在自动重连」「回复没能发到微信，会自动重试」「微信暂时不让助理先发消息（多半是超过一天没在微信里说话），在微信里回一句，没发出去的就会补发」。问题解决后会清掉。`windowClosesAt` 是微信不再收 bot 消息的时间：用户最后一条微信消息之后 24 小时，用户还没发过消息时没有。
 - `setOptions({ enabled: false })`：停掉所有连接，设回 `true` 再接上。全局和绑定的开关都开着，绑定才算开，所以这里设回 `true` 不会接上绑定自己关掉的那些。`replyMaxChars` 立即生效，只影响没有设过自己上限的绑定。
 - `setBindingOptions`、`reconnect`、`diagnose`：见下面的「微信设置页用的接口」。
 
@@ -106,7 +106,7 @@ interface BindingStatus {
 | 连接微信服务器 | 调一次 iLink 的 `getconfig`（5 秒超时）能得到回答 | 连不上微信服务器 / 微信服务器没有及时回应 / 微信服务器出错（HTTP 502） |
 | 微信登录状态 | 服务器接受 token（`getconfig` 说不清时，看最近一次轮询是否成功） | 微信登录已失效，请重新绑定 |
 | 绑定的会话 | 会话存在，而且是允许的 preset | 还没有绑定会话 / 找不到会话 … / 会话 … 的类型是「…」… |
-| 待发的回复 | 发件箱里没有发送失败过的回复 | 还有 2 条回复没发出去，其中 1 条发送失败过，会在连上后自动补发 |
+| 待发的回复 | 发件箱里没有发送失败过、也没有在等用户说话的回复 | 还有 2 条回复没发出去，其中 1 条发送失败过，会在连上后自动补发（上次失败：…，…）/ 还有 1 条消息在等你在微信里说话：微信暂时不让助理先发，你回一句就会补发（上次失败：…，sendmessage ret=-2 …） |
 
 诊断不改任何东西，唯一的例外是：全部通过时清掉 `lastError`（并发出 `im-robot/status`）。没扫码登录过的用户只返回一项「微信登录信息」不通过。
 
@@ -167,12 +167,14 @@ agent.followup(createUserMessage({
 - **发件箱**：每条最终回复切段后，先写进状态文件的 `outbox`，发成功再删掉。没发出去的，在下一次长轮询成功时补发，所以重连或重启后都会补发。补发时用这条回复当时的 `context_token`。超过 24 小时的直接丢弃；失败超过 3 次（第 4 次还失败）也丢弃。丢弃只记日志。
 - 后台结果、别的代理的消息、宿主通知的回答和 `send` 也进发件箱。提醒推送和提示语不进，只发一次。
 - 账号还没发过消息时没有 `context_token`。这时服务器拒收的话不算失败，发件箱会等他发来第一条消息再发（24 小时内）。
+- **一天不说话就不让先发**：用户最后一条微信消息之后大约 24 小时，iLink 不再收 bot 先发的消息。腾讯没有写明这个规则，第三方桥接项目都这么说；在用户的 Desktop 上，隔 5 小时发的能收到，隔 33、38 小时发的都没到。另有第三方说法称，用户每发一条消息，bot 最多能发 10 条左右，这条没验证过。所以发送失败时，如果 iLink 回的是 `-2`（去掉 `context_token` 重发后仍然是 `-2`），或者离用户最后一条消息已超过 24 小时，就不算失败、也不重试，发件箱等用户下一条消息；之后来的回复也排在后面。用户一发消息，发件箱就用这条消息的 `context_token` 按顺序补发（超过 24 小时的照常丢弃）。等待期间 `lastError` 会说明，诊断也会写出来。
+- 最近一次发送失败（时间和 iLink 的回答，不含任何凭据）记在状态文件的 `lastSendFailure` 里，重启后也能查。
 - **会话过期**：用户一段时间没说话后，iLink 对带旧 `context_token` 的消息会回 `-2`（`prepare failed` 或 `unknown error`）。这时去掉 `context_token`、换一个 client id 再发一次（照 dsh-weixin-ilink 0.10.3 的做法）。以前这种消息会算发送失败，重试几次后被丢掉，用户收不到主动发的消息。
 
 ## 数据放在哪里
 
 - 微信的 `bot_token` 存在 `ctx.credentials`，引用名是 `IM_ROBOT_WECHAT_<bindingId>`。引用名只能用字母、数字和 `_`，所以 id 里的 `_` 写成 `_5F`，`-` 写成 `_2D`。
-- 其余的放在 `$DSH_HOME/plugin-data/im-robot/<bindingId>.json`（`DSH_HOME` 默认 `~/.dsh`），权限 0600。里面有：会话 id、打码后的用户名、`ilink_user_id`、iLink 分配的 API 地址、`getupdates` 的 sync buf、最新的 `context_token`、最近一次输入是否来自微信、绑定选项（`options`）、最近收发消息的时间，以及还没发出去的回复（`outbox`）。
+- 其余的放在 `$DSH_HOME/plugin-data/im-robot/<bindingId>.json`（`DSH_HOME` 默认 `~/.dsh`），权限 0600。里面有：会话 id、打码后的用户名、`ilink_user_id`、iLink 分配的 API 地址、`getupdates` 的 sync buf、最新的 `context_token`、最近一次输入是否来自微信、绑定选项（`options`）、最近收发消息的时间、最近一次发送失败，以及还没发出去的回复（`outbox`）。
 
 ## 第一版不做
 

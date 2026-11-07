@@ -19,7 +19,7 @@ The vitest specs. Most drive the real service and the real WeChat adapter agains
 - `reliability.test.ts` — exponential reconnect, the expired-login status, status change events, the outbox (persistence, context tokens, retry after a poll or a restart, the 24-hour and failure limits), and failures staying inside the plugin.
 - `messages.test.ts` — sender filtering, voice, the inbound event before the prompt, replies, `<keep>` blocks end to end, typing, notices, the stale-token pause, reminders, follow-ups (worker reports, agent and team messages, host notes, silent turns, the outbox), cursor resume, and options.
 - `media.test.ts` — key encodings, decryption, trusted URLs, file names, the size limit, and images, files, voice, video, and quotes end to end.
-- `send.test.ts` — `send`, `autoPush` off, no double answers, and sending before the account's first message.
+- `send.test.ts` — `send`, `autoPush` off, no double answers, sending before the account's first message, the stale-session resend, waiting for the next message after a refusal or a day of silence, and `route`.
 - `controls.test.ts` — what the parent's settings panel drives: per-binding options and their persistence, switching one binding off, its own reply length, message times, steering, `/` commands, `reconnect`, and `diagnose`.
 - `reply.test.ts` — Markdown stripping, splitting by sentence and clause marks in several scripts, numbers and links left whole, character counting, and `<keep>` blocks.
 - `store.test.ts` — binding ids, credential names, the data directory, and state files, including defaults for older files.

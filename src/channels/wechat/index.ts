@@ -35,6 +35,14 @@ export const CONNECTION_PROBLEM: Record<Exclude<MonitorHealth, 'connected'>, str
 /** Default timeout of the `probe` call. */
 const PROBE_TIMEOUT_MS = 5_000
 
+/**
+ * How long after the person's latest message iLink still takes the bot's
+ * messages: a day, as third-party bridges describe it (Tencent documents no
+ * figure). On the user's Desktop, sends 5 hours after their last message
+ * arrived and sends 33 and 38 hours after it did not.
+ */
+export const REPLY_WINDOW_MS = 24 * 60 * 60_000
+
 /** Construction options; tests point `baseUrl` at a fake server and shorten timings. */
 export interface WechatOptions {
   baseUrl?: string
@@ -53,6 +61,7 @@ export interface WechatOptions {
 /** WeChat over iLink. */
 export class WechatAdapter implements ChannelAdapter {
   readonly channel = 'wechat' as const
+  readonly replyWindowMs = REPLY_WINDOW_MS
   private readonly baseUrl: string
   private readonly loginTiming: LoginTiming
   private readonly monitorTiming: MonitorTiming

@@ -42,6 +42,15 @@ export type InboundMessage =
   | { kind: 'text'; text: string; files?: readonly InboundFile[] }
   | { kind: 'unsupported' }
 
+/**
+ * The platform refused a message until the person writes again (WeChat: their
+ * chat went quiet too long, or too much was sent since their last message).
+ * The service keeps the message and sends it after their next one.
+ */
+export class ChatRefusedError extends Error {
+  override readonly name = 'ChatRefusedError'
+}
+
 /** What a quick, read-only check of an account found. */
 export interface ChannelProbe {
   /** Whether the platform's server answered. */
@@ -75,6 +84,11 @@ export interface ChannelLink {
 /** One chat platform. */
 export interface ChannelAdapter {
   readonly channel: Channel
+  /**
+   * How long after the person's latest message the platform still takes
+   * messages they have not answered; undefined when it sets no such limit.
+   */
+  readonly replyWindowMs?: number
   /** Run one login; ends after `confirmed`, `expired`, `failed`, or an abort. */
   login(signal: AbortSignal): AsyncIterable<AdapterLoginState>
   /**
@@ -90,7 +104,11 @@ export interface ChannelAdapter {
    * same context.
    */
   replyContext(link: ChannelLink): string | undefined
-  /** Send one plain-text message to the person who logged in, in `context` when given, else the latest. */
+  /**
+   * Send one plain-text message to the person who logged in, in `context` when
+   * given, else the latest; throws {@link ChatRefusedError} when only their next
+   * message can let it through.
+   */
   send(link: ChannelLink, text: string, context?: string): Promise<void>
   /**
    * Ask the server one lightweight question with the account's secret,

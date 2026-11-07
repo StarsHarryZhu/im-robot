@@ -628,7 +628,7 @@ describe('diagnose', () => {
     await until(() => server.to('sendmessage').length === 1, 3000, 'failed send')
     await sleep(20)
     expect(await check('待发的回复')).toEqual({
-      label: '待发的回复', ok: false, detail: '还有 1 条回复没发出去，其中 1 条发送失败过，会在连上后自动补发',
+      label: '待发的回复', ok: false, detail: expect.stringMatching(/^还有 1 条回复没发出去，其中 1 条发送失败过，会在连上后自动补发（上次失败：.+，ilink\/bot\/sendmessage HTTP 500）$/u),
     })
   })
 

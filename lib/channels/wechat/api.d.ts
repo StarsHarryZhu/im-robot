@@ -20,7 +20,10 @@
  * contributors; full text in THIRD_PARTY_NOTICES.md): after a quiet period
  * iLink answers `-2` with "prepare failed" or "unknown error" to a message
  * carrying the old `context_token`, and the same message without the token
- * goes through. Written here for this module's `post`.
+ * goes through. Written here for this module's `post`. A `-2` that remains
+ * is taken as iLink refusing the message until the person writes again (more
+ * than a day after their last message, or too many messages since it, as
+ * third-party bridges describe it; Tencent documents neither).
  * @module im-robot/channels/wechat/api
  */
 /** The fixed iLink API host; login always starts here. */
@@ -175,8 +178,9 @@ interface SendMessageResponse {
 export declare function isStaleSession(response: SendMessageResponse): boolean;
 /**
  * Send one text message; throws on an HTTP error or a non-zero `ret` or
- * `errcode`. When the context token has gone stale, the message goes once more
- * without it.
+ * `errcode`, a {@link ChatRefusedError} for `-2`. When the context token has
+ * gone stale, the message goes once more without it. The error names the
+ * code and the server's message, never the token.
  */
 export declare function sendTextMessage(message: {
     to: string;

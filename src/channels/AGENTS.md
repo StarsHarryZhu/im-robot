@@ -2,7 +2,7 @@
 
 ## 1. Role
 
-Chat platforms behind one seam. `adapter.ts` defines what the service needs from a platform: a login that yields states and ends with an account, a receive loop that hands over accepted messages in order, saving what they carry in the link's media folder and naming it in their text, and reports its health, a plain-text send in a given reply context, the current reply context for the outbox, a read-only probe of the server and the secret, and a typing indicator. An adapter keeps its own per-account state in the link the service gives it, and the service persists that state in the binding's file. Adding a platform means adding a folder here and listing the adapter in the entry.
+Chat platforms behind one seam. `adapter.ts` defines what the service needs from a platform: a login that yields states and ends with an account, a receive loop that hands over accepted messages in order, saving what they carry in the link's media folder and naming it in their text, and reports its health, a plain-text send in a given reply context that throws `ChatRefusedError` when only the person's next message can let it through, how long after their last message the platform takes unanswered messages (`replyWindowMs`), the current reply context for the outbox, a read-only probe of the server and the secret, and a typing indicator. An adapter keeps its own per-account state in the link the service gives it, and the service persists that state in the binding's file. Adding a platform means adding a folder here and listing the adapter in the entry.
 
 ## 2. Constraints
 
@@ -22,5 +22,6 @@ Chat platforms behind one seam. `adapter.ts` defines what the service needs from
 ## 4. Progress
 
 - Done: the seam and the WeChat adapter.
+- Done (2026-11-07): `ChatRefusedError` and `replyWindowMs`, so the outbox waits for the person instead of giving up.
 - Open: no second platform yet.
 - Goal later: more platforms when users need them.

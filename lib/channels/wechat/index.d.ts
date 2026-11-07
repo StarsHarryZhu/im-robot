@@ -17,6 +17,13 @@ import type { TypingTiming } from './typing.ts';
 export { DEFAULT_BASE_URL } from './api.ts';
 /** What a user reads as `lastError` while the loop is not connected. */
 export declare const CONNECTION_PROBLEM: Record<Exclude<MonitorHealth, 'connected'>, string>;
+/**
+ * How long after the person's latest message iLink still takes the bot's
+ * messages: a day, as third-party bridges describe it (Tencent documents no
+ * figure). On the user's Desktop, sends 5 hours after their last message
+ * arrived and sends 33 and 38 hours after it did not.
+ */
+export declare const REPLY_WINDOW_MS: number;
 /** Construction options; tests point `baseUrl` at a fake server and shorten timings. */
 export interface WechatOptions {
     baseUrl?: string;
@@ -34,6 +41,7 @@ export interface WechatOptions {
 /** WeChat over iLink. */
 export declare class WechatAdapter implements ChannelAdapter {
     readonly channel: "wechat";
+    readonly replyWindowMs: number;
     private readonly baseUrl;
     private readonly loginTiming;
     private readonly monitorTiming;

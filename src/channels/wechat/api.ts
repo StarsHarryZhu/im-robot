@@ -20,11 +20,15 @@
  * contributors; full text in THIRD_PARTY_NOTICES.md): after a quiet period
  * iLink answers `-2` with "prepare failed" or "unknown error" to a message
  * carrying the old `context_token`, and the same message without the token
- * goes through. Written here for this module's `post`.
+ * goes through. Written here for this module's `post`. A `-2` that remains
+ * is taken as iLink refusing the message until the person writes again (more
+ * than a day after their last message, or too many messages since it, as
+ * third-party bridges describe it; Tencent documents neither).
  * @module im-robot/channels/wechat/api
  */
 
 import { randomBytes } from 'node:crypto'
+import { ChatRefusedError } from '../adapter.ts'
 
 /** The fixed iLink API host; login always starts here. */
 export const DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com'
@@ -40,7 +44,7 @@ const ILINK_APP_ID = 'bot'
 const PROTOCOL_VERSION = '2.4.10'
 
 /** Self-declared caller identity, UA style; observability only on the server. */
-const BOT_AGENT = 'im-robot/0.2.1'
+const BOT_AGENT = 'im-robot/0.2.2'
 
 /** `bot_type` for the QR endpoints, as openclaw-weixin sends it. */
 export const BOT_TYPE = '3'
@@ -278,6 +282,9 @@ interface SendMessageResponse {
   errmsg?: string
 }
 
+/** The code iLink answers when it will not take the message now: stale, out of time, or too many. */
+const REFUSED_CODE = -2
+
 /** The two answers iLink gives once a quiet chat's session has gone stale. */
 const STALE_SESSION_MESSAGES: ReadonlySet<string> = new Set(['prepare failed', 'unknown error'])
 
@@ -294,8 +301,9 @@ export function isStaleSession(response: SendMessageResponse): boolean {
 
 /**
  * Send one text message; throws on an HTTP error or a non-zero `ret` or
- * `errcode`. When the context token has gone stale, the message goes once more
- * without it.
+ * `errcode`, a {@link ChatRefusedError} for `-2`. When the context token has
+ * gone stale, the message goes once more without it. The error names the
+ * code and the server's message, never the token.
  */
 export async function sendTextMessage(
   message: { to: string; text: string; contextToken?: string; clientId: string },
@@ -316,7 +324,10 @@ export async function sendTextMessage(
   // A second message needs its own client id, as the reference sends it.
   if (message.contextToken && isStaleSession(response)) response = await attempt(undefined, `${message.clientId}-r`)
   const code = response.ret !== undefined && response.ret !== 0 ? response.ret : response.errcode
-  if (code !== undefined && code !== 0) throw new Error(`sendmessage ret=${code}`)
+  if (code === undefined || code === 0) return
+  const said = (response.errmsg ?? '').trim().slice(0, 120)
+  const text = `sendmessage ret=${code}${said === '' ? '' : ` errmsg=${JSON.stringify(said)}`}`
+  throw code === REFUSED_CODE ? new ChatRefusedError(text) : new Error(text)
 }
 
 /** Fetch the bot config for one user (its typing ticket). */

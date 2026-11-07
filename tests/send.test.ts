@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OWNER, fakeHost, fakeIlink, loginAndBind, makeService, runTurn, sleep, textFrom, until } from './helpers.ts'
 import type { FakeHost, FakeIlink } from './helpers.ts'
 import type { ImRobot } from '../src/service.ts'
@@ -166,6 +166,76 @@ describe('a chat whose session went stale', () => {
     expect(retry!.body.msg.client_id).toBe(`${stale!.body.msg.client_id}-r`)
     await until(() => store.read('mom', () => undefined)?.outbox.length === 0, 3000, 'outbox emptied')
     expect(service.status('mom').lastError).toBeUndefined()
+  })
+})
+
+describe('a chat that takes nothing until the account writes again', () => {
+  let server: FakeIlink
+  let host: FakeHost
+  let service: ImRobot
+  let store: BindingStore
+  beforeEach(async () => {
+    server = await fakeIlink()
+    host = fakeHost({ s1: null })
+    ;({ service, store } = makeService(server, host, { autoPush: false }))
+    await loginAndBind(service, server, 'mom', 's1')
+    server.push(textFrom(OWNER, 'hi', 'ctx-old'))
+    await until(() => host.prompts.length === 1, 3000, 'prompt')
+    runTurn(service, 's1', [fromPrompt(host.prompts[0]!.requestId)], '好')
+    await until(() => server.sent().length === 1, 3000, 'reply')
+  })
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    service.dispose()
+    await server.close()
+  })
+
+  const stored = () => store.read('mom', () => undefined)
+
+  it('keeps what iLink refused, uncounted, and sends it in the context of the next message', async () => {
+    server.state.refuseSend = true
+    service.send('mom', '早上好，今天没有安排')
+    // The stale-session retry runs once, then the outbox waits.
+    await until(() => server.to('sendmessage').length === 3, 3000, 'refused twice')
+    await until(() => service.status('mom').lastError !== undefined, 3000, 'problem shown')
+    expect(service.status('mom').lastError).toMatch(/回一句/u)
+    expect(stored()?.lastSendFailure?.error).toBe('sendmessage ret=-2 errmsg="prepare failed"')
+    // Polls go on and what comes later joins the queue, but nothing is tried while it waits.
+    service.send('mom', '记得带伞')
+    await sleep(150)
+    expect(server.to('sendmessage')).toHaveLength(3)
+    expect(stored()?.outbox.map(entry => [entry.text, entry.failures])).toEqual([['早上好，今天没有安排', 0], ['记得带伞', 0]])
+
+    server.state.refuseSend = false
+    server.push(textFrom(OWNER, '在吗', 'ctx-new'))
+    await until(() => server.sent().length === 5, 3000, 'sent after the next message')
+    expect(server.sent().slice(-2)).toEqual(['早上好，今天没有安排', '记得带伞'])
+    expect(server.to('sendmessage').slice(-2).map(call => call.body.msg.context_token)).toEqual(['ctx-new', 'ctx-new'])
+    await until(() => service.status('mom').lastError === undefined, 3000, 'problem cleared')
+    expect(stored()?.outbox).toEqual([])
+  })
+
+  it('also waits when any send fails a day after the account last wrote, and says when the window closes', async () => {
+    const lastInbound = service.status('mom').lastInboundAt!
+    expect(service.status('mom').windowClosesAt).toBe(lastInbound + 24 * 3_600_000)
+    const later = Date.now() + 25 * 3_600_000
+    vi.spyOn(Date, 'now').mockImplementation(() => later)
+    server.state.failSend = true
+    service.send('mom', '一天多以后的提醒')
+    await until(() => service.status('mom').lastError !== undefined, 3000, 'waiting')
+    expect(service.status('mom').lastError).toMatch(/回一句/u)
+    await sleep(150)
+    expect(server.to('sendmessage')).toHaveLength(2)
+    expect(stored()?.outbox[0]?.failures).toBe(0)
+  })
+
+  it('says in the diagnosis what waits and what the server said', async () => {
+    server.state.refuseSend = true
+    service.send('mom', '提醒')
+    await until(() => service.status('mom').lastError !== undefined, 3000, 'waiting')
+    const outbox = (await service.diagnose('mom')).checks.find(check => check.label === '待发的回复')
+    expect(outbox).toMatchObject({ ok: false, detail: expect.stringContaining('还有 1 条消息在等你在微信里说话') })
+    expect(outbox?.detail).toContain('ret=-2')
   })
 })
 

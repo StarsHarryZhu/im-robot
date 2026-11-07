@@ -17,7 +17,10 @@
  *    written to the binding's outbox on disk, and sent; a sent segment leaves the outbox, a
  *    failed one is retried after the next successful poll (so after a
  *    reconnect or a restart) while it is under 24 hours old and has failed at
- *    most three times;
+ *    most three times; when only the account's next message can let it through
+ *    (it never wrote, or the platform refused until it writes again, as WeChat
+ *    does a day after its last message), the outbox waits for that message,
+ *    uncounted, and then goes out in its context;
  * 4. when a turn without chat input ends and the session's latest human input
  *    came from the chat account, its answer is pushed too, unless `autoPush` is
  *    off: a follow-up's (a worker's report, an agent or team message, or a host
@@ -185,6 +188,14 @@ export declare class ImRobot implements ImRobotService {
      * only logged.
      */
     private flushOutbox;
+    /**
+     * Whether a failed send can only go through after the account's next
+     * message: the adapter said so, or the platform's reply window has closed
+     * since the account last wrote.
+     */
+    private refusedUntilMessage;
+    /** Keep the latest failed send in the state file, so it can be read after a restart. */
+    private noteFailure;
     /**
      * Queue outgoing work behind what the binding already has queued. A failure
      * that escapes is logged: it must neither block later messages nor reach

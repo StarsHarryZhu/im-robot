@@ -81,6 +81,16 @@ export interface StoredBinding {
   lastInboundAt?: number
   /** When the latest message to the account was sent, epoch milliseconds. */
   lastOutboundAt?: number
+  /** The latest failed send: when, and what the platform said, for diagnosis. */
+  lastSendFailure?: SendFailure
+}
+
+/** One failed send as kept for diagnosis. */
+export interface SendFailure {
+  /** Epoch milliseconds. */
+  at: number
+  /** The error, as the adapter worded it: a code and the server's message, never a secret. */
+  error: string
 }
 
 /** Throw unless `bindingId` is a valid binding id. */
@@ -121,7 +131,7 @@ function isOutboxEntry(value: unknown): value is OutboxEntry {
 }
 
 /** The fields {@link normalize} fills in or drops. */
-type LenientFields = 'outbox' | 'options' | 'lastInboundAt' | 'lastOutboundAt'
+type LenientFields = 'outbox' | 'options' | 'lastInboundAt' | 'lastOutboundAt' | 'lastSendFailure'
 
 /** A parsed state file that passed {@link isStoredBinding}. */
 type ParsedBinding = Omit<StoredBinding, LenientFields> & Partial<Record<LenientFields, unknown>>
@@ -150,10 +160,12 @@ function stamp(value: unknown): number | undefined {
 
 /** A stored binding with defaults for the fields older or hand-edited files lack or got wrong. */
 function normalize(parsed: ParsedBinding): StoredBinding {
-  const { outbox, options, lastInboundAt, lastOutboundAt, ...rest } = parsed
+  const { outbox, options, lastInboundAt, lastOutboundAt, lastSendFailure, ...rest } = parsed
   const given = (typeof options === 'object' && options !== null ? options : {}) as Record<string, unknown>
   const inbound = stamp(lastInboundAt)
   const outbound = stamp(lastOutboundAt)
+  const failure = (typeof lastSendFailure === 'object' && lastSendFailure !== null ? lastSendFailure : {}) as Record<string, unknown>
+  const failedAt = stamp(failure.at)
   return {
     ...rest,
     outbox: Array.isArray(outbox) ? outbox as OutboxEntry[] : [],
@@ -166,6 +178,7 @@ function normalize(parsed: ParsedBinding): StoredBinding {
     },
     ...(inbound === undefined ? {} : { lastInboundAt: inbound }),
     ...(outbound === undefined ? {} : { lastOutboundAt: outbound }),
+    ...(failedAt === undefined || typeof failure.error !== 'string' ? {} : { lastSendFailure: { at: failedAt, error: failure.error } }),
   }
 }
 
