@@ -51,6 +51,8 @@ export interface Config {
   replyMaxChars: number
   /** Whether turns no chat message started are answered on the chat by themselves. */
   autoPush: boolean
+  /** A reply that is exactly this text, its surrounding blank space aside, is never sent; empty sends every reply. */
+  silentReply: string
 }
 
 export const Config: z<Config> = z.object({
@@ -60,6 +62,8 @@ export const Config: z<Config> = z.object({
     .description('Longest reply segment in characters; longer replies are split at sentence ends, then commas, into several messages'),
   autoPush: z.boolean().default(true)
     .description('Answer turns no chat message started (a worker report, a host note, a reminder) on the chat by themselves, while its input was the latest; off when the caller sends with `imRobot.send`'),
+  silentReply: z.string().default('')
+    .description('A turn whose whole reply is exactly this text sends nothing to the chat, not even the no-reply notice; for a caller whose model answers a turn with nothing to say with a fixed marker. Empty sends every reply'),
 }) as unknown as z<Config>
 
 /** The services and events this plugin uses, beyond what cordis types. */
@@ -103,6 +107,7 @@ export function apply(ctx: Context, config: Config): void {
     presets: config?.presets ?? [],
     replyMaxChars: config?.replyMaxChars ?? DEFAULT_REPLY_MAX_CHARS,
     autoPush: config?.autoPush ?? true,
+    silentReply: config?.silentReply ?? '',
     store: new BindingStore(defaultDataDirectory()),
     adapters: [new WechatAdapter()],
   })

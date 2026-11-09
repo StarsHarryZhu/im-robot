@@ -1,6 +1,6 @@
 {
   "name": "@starsharryzhu/im-robot",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Connect a WeChat account to a DeepSeek Harness session: messages from the account that scanned the login code, with their images, files, voice, and video saved in a folder, are prompted into the bound session; the turn's final reply goes back as plain text, and a caller can send at any time. Host-only, no tools, no prompts.",
   "keywords": [
     "dsh-plugin",

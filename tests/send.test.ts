@@ -313,3 +313,67 @@ describe('routing a turn', () => {
     expect(() => service.send('mom', 'hi', { notBefore: Number.NaN })).toThrow(/epoch/u)
   })
 })
+
+describe('a reply that is the silent marker', () => {
+  let server: FakeIlink
+  let host: FakeHost
+  let service: ImRobot
+  beforeEach(async () => {
+    server = await fakeIlink()
+    host = fakeHost({ s1: null })
+  })
+  afterEach(async () => {
+    service.dispose()
+    await server.close()
+  })
+
+  /** A host note's turn, routed to the chat in the middle. */
+  const routedTurn = (reply: string): void => {
+    service.observe('s1', { type: 'turn/start', data: { turn: 1 } })
+    service.observe('s1', { type: 'user/message', data: { source: { kind: 'host-note', plugin: 'p' } } })
+    service.route('mom', { chat: true })
+    service.observe('s1', { type: 'assistant/message', data: { message: { role: 'assistant', content: [{ type: 'text', text: reply }] } } })
+    service.observe('s1', { type: 'turn/end', data: { turn: 1 } })
+  }
+
+  it('sends nothing for it, not even the no-reply notice, and clears typing', async () => {
+    ;({ service } = makeService(server, host, { autoPush: false, silentReply: '[silent]' }))
+    await loginAndBind(service, server, 'mom', 's1')
+    server.push(textFrom(OWNER, '[Onlooker]'))
+    await until(() => host.prompts.length === 1, 3000, 'prompt')
+    runTurn(service, 's1', [fromPrompt(host.prompts[0]!.requestId)], '\n\n[silent]\n')
+    await until(() => server.to('sendtyping').some(call => call.body.status === 2), 3000, 'typing cleared')
+    routedTurn('[silent]')
+    await sleep(80)
+    expect(server.sent()).toEqual([])
+    server.push(textFrom(OWNER, '在吗'))
+    await until(() => host.prompts.length === 2, 3000, 'second prompt')
+    runTurn(service, 's1', [fromPrompt(host.prompts[1]!.requestId)], '在的，[silent] 是我的内部标记')
+    await until(() => server.sent().length === 1, 3000, 'an ordinary reply')
+    expect(server.sent()).toEqual(['在的，[silent] 是我的内部标记'])
+  })
+
+  it('pushes nothing for it when autoPush is on either', async () => {
+    ;({ service } = makeService(server, host, { silentReply: '[silent]' }))
+    await loginAndBind(service, server, 'mom', 's1')
+    server.push(textFrom(OWNER, 'hi'))
+    await until(() => host.prompts.length === 1, 3000, 'prompt')
+    runTurn(service, 's1', [fromPrompt(host.prompts[0]!.requestId)], '好的')
+    await until(() => server.sent().length === 1, 3000, 'reply')
+    runTurn(service, 's1', [{ source: { kind: 'host-note', plugin: 'p' } }], '[silent]')
+    runTurn(service, 's1', [{ source: { kind: 'subagent-settled' } }], '任务结果')
+    await until(() => server.sent().length === 2, 3000, 'the follow-up')
+    await sleep(60)
+    expect(server.sent()).toEqual(['好的', '任务结果'])
+  })
+
+  it('is sent like any text when no marker is set', async () => {
+    ;({ service } = makeService(server, host, { autoPush: false }))
+    await loginAndBind(service, server, 'mom', 's1')
+    server.push(textFrom(OWNER, 'hi'))
+    await until(() => host.prompts.length === 1, 3000, 'prompt')
+    runTurn(service, 's1', [fromPrompt(host.prompts[0]!.requestId)], '[silent]')
+    await until(() => server.sent().length === 1, 3000, 'reply')
+    expect(server.sent()).toEqual(['[silent]'])
+  })
+})

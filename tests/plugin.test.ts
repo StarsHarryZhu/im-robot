@@ -34,8 +34,9 @@ describe('the plugin under real cordis', () => {
   it('declares its name, injections, and config defaults', () => {
     expect(plugin.name).toBe('im-robot')
     expect(plugin.inject).toEqual(['credentials', 'sessionController'])
-    expect(plugin.Config({})).toEqual({ presets: [], replyMaxChars: 100, autoPush: true })
-    expect(plugin.Config({ presets: ['dsh-assisstant'], replyMaxChars: 800, autoPush: false })).toEqual({ presets: ['dsh-assisstant'], replyMaxChars: 800, autoPush: false })
+    expect(plugin.Config({})).toEqual({ presets: [], replyMaxChars: 100, autoPush: true, silentReply: '' })
+    expect(plugin.Config({ presets: ['dsh-assisstant'], replyMaxChars: 800, autoPush: false, silentReply: '[silent]' }))
+      .toEqual({ presets: ['dsh-assisstant'], replyMaxChars: 800, autoPush: false, silentReply: '[silent]' })
     expect(() => plugin.Config({ replyMaxChars: 2 })).toThrow()
   })
 

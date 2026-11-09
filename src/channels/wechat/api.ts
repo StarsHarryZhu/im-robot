@@ -44,7 +44,7 @@ const ILINK_APP_ID = 'bot'
 const PROTOCOL_VERSION = '2.4.10'
 
 /** Self-declared caller identity, UA style; observability only on the server. */
-const BOT_AGENT = 'im-robot/0.2.2'
+const BOT_AGENT = 'im-robot/0.2.3'
 
 /** `bot_type` for the QR endpoints, as openclaw-weixin sends it. */
 export const BOT_TYPE = '3'

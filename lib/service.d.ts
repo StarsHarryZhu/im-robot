@@ -26,6 +26,8 @@
  *    off: a follow-up's (a worker's report, an agent or team message, or a host
  *    note) through the outbox like a reply, a reminder's once without it; a turn
  *    with no text sends nothing;
+ *    a turn whose whole text is the configured `silentReply` sends nothing in
+ *    any of these cases, not even the no-reply notice;
  * 5. `send` reaches the account at any time, through the outbox; a turn running
  *    meanwhile sends no reply of its own.
  *
@@ -81,6 +83,8 @@ export interface ServiceOptions {
     replyMaxChars: number;
     /** Whether turns no chat message started are answered on the chat by themselves; default true. */
     autoPush?: boolean;
+    /** A reply that is exactly this text, trimmed, sends nothing; empty or absent sends every reply. */
+    silentReply?: string;
     store: BindingStore;
     adapters: readonly ChannelAdapter[];
     /** Longest wait of `reconnect`; default {@link RECONNECT_WAIT_MS}. */
@@ -176,6 +180,8 @@ export declare class ImRobot implements ImRobotService {
      * reminder's answer, or follow the caller's route for the turn.
      */
     private onTurnEnd;
+    /** @returns whether a turn's text is the configured silent reply. */
+    private isSilent;
     /** Count `count` prompted messages as answered; clear "typing" when none is left. */
     private settle;
     /** Write a reply's segments to the outbox, not to go before `notBefore` when given, then send what the outbox holds. */

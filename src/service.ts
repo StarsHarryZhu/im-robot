@@ -26,6 +26,8 @@
  *    off: a follow-up's (a worker's report, an agent or team message, or a host
  *    note) through the outbox like a reply, a reminder's once without it; a turn
  *    with no text sends nothing;
+ *    a turn whose whole text is the configured `silentReply` sends nothing in
+ *    any of these cases, not even the no-reply notice;
  * 5. `send` reaches the account at any time, through the outbox; a turn running
  *    meanwhile sends no reply of its own.
  *
@@ -151,6 +153,8 @@ export interface ServiceOptions {
   replyMaxChars: number
   /** Whether turns no chat message started are answered on the chat by themselves; default true. */
   autoPush?: boolean
+  /** A reply that is exactly this text, trimmed, sends nothing; empty or absent sends every reply. */
+  silentReply?: string
   store: BindingStore
   adapters: readonly ChannelAdapter[]
   /** Longest wait of `reconnect`; default {@link RECONNECT_WAIT_MS}. */
@@ -772,6 +776,8 @@ export class ImRobot implements ImRobotService {
   private onTurnEnd(signal: Extract<TurnSignal, { kind: 'turn-end' }>): void {
     const answered = [...new Set(signal.bindings)]
     const { route } = signal
+    // The caller's model said nothing on purpose: no reply, no routed text, no push, and no no-reply notice.
+    const silent = this.isSilent(signal.text)
     for (const bindingId of answered) {
       const runtime = this.bindings.get(bindingId)
       if (runtime === undefined) continue
@@ -779,11 +785,11 @@ export class ImRobot implements ImRobotService {
       if (runtime.stored.sessionId !== signal.sessionId) continue
       this.setLastInput(runtime, true)
       // The caller answered through `send`, or kept this turn's text off the chat.
-      if (signal.sent || route?.chat === false) continue
+      if (signal.sent || route?.chat === false || silent) continue
       const segments = this.segmentsOf(runtime, signal.text)
       this.enqueueReply(runtime, segments.length > 0 ? segments : [NOTICE.noReply], route?.notBefore)
     }
-    if (answered.length > 0 || route?.chat === false) return
+    if (answered.length > 0 || route?.chat === false || silent) return
     if (route?.chat === true) {
       for (const runtime of this.runtimesOf(signal.sessionId)) {
         if (!this.isOn(runtime)) continue
@@ -802,6 +808,12 @@ export class ImRobot implements ImRobotService {
       if (signal.followUp) this.enqueueReply(runtime, segments)
       else this.sendOnce(runtime, segments, 'reminder')
     }
+  }
+
+  /** @returns whether a turn's text is the configured silent reply. */
+  private isSilent(text: string): boolean {
+    const marker = this.options.silentReply?.trim() ?? ''
+    return marker !== '' && text.trim() === marker
   }
 
   /** Count `count` prompted messages as answered; clear "typing" when none is left. */

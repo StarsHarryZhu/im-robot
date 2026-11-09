@@ -37,6 +37,8 @@ export interface Config {
     replyMaxChars: number;
     /** Whether turns no chat message started are answered on the chat by themselves. */
     autoPush: boolean;
+    /** A reply that is exactly this text, its surrounding blank space aside, is never sent; empty sends every reply. */
+    silentReply: string;
 }
 export declare const Config: z<Config>;
 /**

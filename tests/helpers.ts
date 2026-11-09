@@ -291,6 +291,7 @@ export function makeService(server: FakeIlink, host: FakeHost, options: {
   monitor?: Partial<MonitorTiming>
   reconnectWaitMs?: number
   autoPush?: boolean
+  silentReply?: string
   mediaMaxBytes?: number
 } = {}) {
   const directory = options.directory ?? tempDir()
@@ -309,6 +310,7 @@ export function makeService(server: FakeIlink, host: FakeHost, options: {
       ...(options.mediaMaxBytes === undefined ? {} : { mediaMaxBytes: options.mediaMaxBytes }),
     })],
     ...(options.autoPush === undefined ? {} : { autoPush: options.autoPush }),
+    ...(options.silentReply === undefined ? {} : { silentReply: options.silentReply }),
     ...(options.reconnectWaitMs === undefined ? {} : { reconnectWaitMs: options.reconnectWaitMs }),
   })
   return { service, store, directory }
