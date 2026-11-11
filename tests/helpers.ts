@@ -44,7 +44,18 @@ export interface Call {
   endpoint: string
   query: URLSearchParams
   headers: IncomingHttpHeaders
+  /** Parsed JSON; a CDN upload's bytes are in `bytes` instead. */
   body: any
+  bytes: Buffer
+}
+
+/** One file the fake CDN received. */
+export interface Upload {
+  /** `encrypted_query_param` of the upload URL. */
+  param: string
+  filekey: string
+  /** The encrypted bytes. */
+  bytes: Buffer
 }
 
 /**
@@ -52,7 +63,9 @@ export interface Call {
  * (`wait` once empty); getupdates holds briefly for queued batches and hands
  * out cursors `buf-1`, `buf-2`, ...; sendmessage can be told to fail, to
  * refuse a stale context token, or to refuse everything; getconfig
- * answers `ok`, a stale token, or HTTP 500.
+ * answers `ok`, a stale token, or HTTP 500; getuploadurl hands out
+ * `up-1`, `up-2`, ..., and the CDN keeps each upload and answers its
+ * download parameter `down-<param>`.
  */
 export async function fakeIlink() {
   const calls: Call[] = []
@@ -60,6 +73,8 @@ export async function fakeIlink() {
   const batches: WeixinMessage[][] = []
   /** What the fake CDN serves, by `encrypted_query_param`. */
   const cdn = new Map<string, Buffer>()
+  /** What the fake CDN received, in order. */
+  const uploads: Upload[] = []
   const state = {
     codes: 0, cursor: 0, failQr: false, failSend: false, stale: 0, failUpdates: 0,
     /** How many sendmessage calls carrying a context token answer that the chat's session went stale. */
@@ -70,19 +85,29 @@ export async function fakeIlink() {
     holdMs: 40,
     /** How long a sendmessage is held after it was recorded. */
     sendHoldMs: 0,
+    /** Upload slots handed out. */
+    slots: 0,
+    /** How getuploadurl answers: a slot, a slot with only an off-CDN full URL, or HTTP 500. */
+    uploadUrl: 'ok' as 'ok' | 'foreign' | 'error',
+    /** CDN uploads that answer HTTP 500 before one succeeds. */
+    failUploads: 0,
+    /** Whether the CDN leaves out `x-encrypted-param`. */
+    noDownloadParam: false,
     config: 'ok' as 'ok' | 'stale' | 'error',
   }
   let wake: (() => void) | undefined
 
   const server = createServer((request, response) => {
-    let raw = ''
-    request.on('data', (chunk) => { raw += chunk })
+    const chunks: Buffer[] = []
+    request.on('data', (chunk: Buffer) => { chunks.push(chunk) })
     request.on('end', () => {
       void (async () => {
         const url = new URL(request.url ?? '/', 'http://fake')
         const endpoint = url.pathname.slice(1)
-        const body = raw === '' ? undefined : JSON.parse(raw)
-        calls.push({ endpoint, query: url.searchParams, headers: request.headers, body })
+        const bytes = Buffer.concat(chunks)
+        const json = request.headers['content-type'] === 'application/json' && bytes.length > 0
+        const body = json ? JSON.parse(bytes.toString('utf8')) : undefined
+        calls.push({ endpoint, query: url.searchParams, headers: request.headers, body, bytes })
         const reply = (status: number, value: unknown) => {
           response.writeHead(status, { 'Content-Type': 'application/json' })
           response.end(JSON.stringify(value))
@@ -130,6 +155,22 @@ export async function fakeIlink() {
             return reply(200, { ret: 0, typing_ticket: 'ticket-1' })
           case 'ilink/bot/sendtyping':
             return reply(200, { ret: 0 })
+          case 'ilink/bot/getuploadurl':
+            if (state.uploadUrl === 'error') return reply(500, { error: 'down' })
+            state.slots += 1
+            if (state.uploadUrl === 'foreign') return reply(200, { ret: 0, upload_full_url: 'https://evil.example/upload' })
+            return reply(200, { ret: 0, upload_param: `up-${state.slots}` })
+          case 'c2c/upload': {
+            if (state.failUploads > 0) {
+              state.failUploads -= 1
+              return reply(500, { error: 'cdn down' })
+            }
+            const param = url.searchParams.get('encrypted_query_param') ?? ''
+            uploads.push({ param, filekey: url.searchParams.get('filekey') ?? '', bytes })
+            response.writeHead(200, state.noDownloadParam ? {} : { 'x-encrypted-param': `down-${param}` })
+            response.end()
+            return undefined
+          }
           case 'c2c/download': {
             const bytes = cdn.get(url.searchParams.get('encrypted_query_param') ?? '')
             if (bytes === undefined) return reply(404, {})
@@ -149,6 +190,7 @@ export async function fakeIlink() {
     baseUrl: `http://127.0.0.1:${port}`,
     cdnBaseUrl: `http://127.0.0.1:${port}/c2c`,
     cdn,
+    uploads,
     calls,
     qrStatuses,
     state,
@@ -161,9 +203,13 @@ export async function fakeIlink() {
     to(endpoint: string): Call[] {
       return calls.filter(call => call.endpoint === `ilink/bot/${endpoint}`)
     },
-    /** Texts sent with sendmessage, in order. */
+    /** Texts sent with sendmessage, in order; other items are left out. */
     sent(): string[] {
-      return calls.filter(call => call.endpoint === 'ilink/bot/sendmessage').map(call => call.body.msg.item_list[0].text_item.text as string)
+      return this.items().filter(item => item.type === 1).map(item => item.text_item.text as string)
+    },
+    /** The item of every sendmessage, in order. */
+    items(): any[] {
+      return calls.filter(call => call.endpoint === 'ilink/bot/sendmessage').map(call => call.body.msg.item_list[0])
     },
     close: () => new Promise<void>((resolve) => {
       server.closeAllConnections()
@@ -293,6 +339,7 @@ export function makeService(server: FakeIlink, host: FakeHost, options: {
   autoPush?: boolean
   silentReply?: string
   mediaMaxBytes?: number
+  sendMaxBytes?: number
 } = {}) {
   const directory = options.directory ?? tempDir()
   const store = new BindingStore(directory)
@@ -308,6 +355,7 @@ export function makeService(server: FakeIlink, host: FakeHost, options: {
       probeTimeoutMs: 500,
       cdnBaseUrl: server.cdnBaseUrl,
       ...(options.mediaMaxBytes === undefined ? {} : { mediaMaxBytes: options.mediaMaxBytes }),
+      ...(options.sendMaxBytes === undefined ? {} : { sendMaxBytes: options.sendMaxBytes }),
     })],
     ...(options.autoPush === undefined ? {} : { autoPush: options.autoPush }),
     ...(options.silentReply === undefined ? {} : { silentReply: options.silentReply }),

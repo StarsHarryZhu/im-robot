@@ -19,7 +19,7 @@ import { DEFAULT_LOGIN_TIMING, loginWithQr } from './login.ts'
 import type { LoginTiming } from './login.ts'
 import { DEFAULT_MONITOR_TIMING, monitorUpdates } from './monitor.ts'
 import type { MonitorHealth, MonitorTiming } from './monitor.ts'
-import { sendText } from './send.ts'
+import { sendFile, sendText } from './send.ts'
 import { DEFAULT_TYPING_TIMING, TypingTickets, startTyping } from './typing.ts'
 import type { TypingTiming } from './typing.ts'
 
@@ -56,6 +56,9 @@ export interface WechatOptions {
   /** Timeout and size limit of one media download. */
   mediaTimeoutMs?: number
   mediaMaxBytes?: number
+  /** Timeout and size limit of one file sent. */
+  uploadTimeoutMs?: number
+  sendMaxBytes?: number
 }
 
 /** WeChat over iLink. */
@@ -69,6 +72,7 @@ export class WechatAdapter implements ChannelAdapter {
   private readonly probeTimeoutMs: number
   private readonly cdnBaseUrl: string
   private readonly mediaLimits: { timeoutMs?: number; maxBytes?: number }
+  private readonly uploadLimits: { timeoutMs?: number; maxBytes?: number }
   private readonly tickets = new Map<string, TypingTickets>()
 
   constructor(options: WechatOptions = {}) {
@@ -81,6 +85,10 @@ export class WechatAdapter implements ChannelAdapter {
     this.mediaLimits = {
       ...(options.mediaTimeoutMs === undefined ? {} : { timeoutMs: options.mediaTimeoutMs }),
       ...(options.mediaMaxBytes === undefined ? {} : { maxBytes: options.mediaMaxBytes }),
+    }
+    this.uploadLimits = {
+      ...(options.uploadTimeoutMs === undefined ? {} : { timeoutMs: options.uploadTimeoutMs }),
+      ...(options.sendMaxBytes === undefined ? {} : { maxBytes: options.sendMaxBytes }),
     }
   }
 
@@ -132,11 +140,21 @@ export class WechatAdapter implements ChannelAdapter {
   }
 
   async send(link: ChannelLink, text: string, context?: string): Promise<void> {
+    await sendText(await this.target(link, context), text)
+  }
+
+  async sendFile(link: ChannelLink, path: string, context?: string): Promise<void> {
+    await sendFile({ ...await this.target(link, context), cdnBaseUrl: this.cdnBaseUrl, ...this.uploadLimits }, path)
+  }
+
+  /** The account's host, secret, and recipient, and the context to send in. */
+  private async target(link: ChannelLink, context?: string): Promise<{ baseUrl: string; token: string; to: string; contextToken?: string }> {
     const token = await link.token()
     if (token === undefined) throw new Error('the binding has no stored credential')
     const to = link.state.ilinkUserId
     if (!to) throw new Error('the binding has no ilinkUserId')
-    await sendText({ baseUrl: this.apiBase(link), token, to, contextToken: context ?? link.state.contextToken }, text)
+    const contextToken = context ?? link.state.contextToken
+    return { baseUrl: this.apiBase(link), token, to, ...(contextToken ? { contextToken } : {}) }
   }
 
   /** One getconfig call: it needs the bot token and only reads the account's typing ticket. */

@@ -29,7 +29,11 @@
  *    a turn whose whole text is the configured `silentReply` sends nothing in
  *    any of these cases, not even the no-reply notice;
  * 5. `send` reaches the account at any time, through the outbox; a turn running
- *    meanwhile sends no reply of its own.
+ *    meanwhile sends no reply of its own;
+ * 6. files given to `send`, or to `route` with the chat chosen, follow the text
+ *    through the outbox, one entry each, read and uploaded when they go: held,
+ *    retried, and waiting for the account's next message like text; a file
+ *    that is gone or cannot go by then is dropped.
  *
  * Bridging a chat account to a DSH session follows the idea of
  * `dsh-weixin-ilink` 0.9.1, `src/agent-bridge.js` (MIT License, Copyright (c)
@@ -54,6 +58,8 @@ export declare const OUTBOX_MAX_FAILURES = 3;
 export declare const RECONNECT_WAIT_MS = 15000;
 /** Latest `notBefore` a caller may ask for: an entry waits at most this long. */
 export declare const MAX_HOLD_MS: number;
+/** Largest file `send` and `route` take: what WeChat's adapter sends at most. */
+export declare const MAX_SEND_FILE_BYTES: number;
 /** Host services the service uses. */
 export interface ServiceHost {
     credentials: CredentialsLike;
@@ -119,6 +125,7 @@ export declare class ImRobot implements ImRobotService {
     setBindingOptions(bindingId: string, options: BindingOptions): BindingStatus;
     send(bindingId: string, text: string, options?: {
         notBefore?: number;
+        files?: readonly string[];
     }): void;
     route(bindingId: string, route: TurnRoute): boolean;
     /** A binding that can send now: logged in, bound, and switched on; else a plain-Chinese error. */
@@ -184,7 +191,10 @@ export declare class ImRobot implements ImRobotService {
     private isSilent;
     /** Count `count` prompted messages as answered; clear "typing" when none is left. */
     private settle;
-    /** Write a reply's segments to the outbox, not to go before `notBefore` when given, then send what the outbox holds. */
+    /**
+     * Write a reply's segments, then its files, to the outbox, not to go before
+     * `notBefore` when given, then send what the outbox holds.
+     */
     private enqueueReply;
     /**
      * Send the outbox in order after anything already queued for the binding.

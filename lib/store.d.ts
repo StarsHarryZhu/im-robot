@@ -24,8 +24,10 @@ export declare const DEFAULT_BINDING_SETTINGS: Readonly<BindingSettings>;
  */
 export interface OutboxEntry {
     id: string;
-    /** One plain-text segment, already stripped and split. */
+    /** One plain-text segment, already stripped and split; empty for a file. */
     text: string;
+    /** A file to send instead of text: its absolute path, read when it is sent. */
+    file?: string;
     /** The reply context when the reply was made (WeChat: its `context_token`). */
     context?: string;
     /** When the reply was made, epoch milliseconds. */

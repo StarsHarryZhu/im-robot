@@ -63,12 +63,14 @@ export type TurnSignal =
 
 /**
  * A caller's choice for one turn's final text: `chat: true` sends it to the
- * chat whatever started the turn, not before `notBefore` when given;
- * `chat: false` keeps it off the chat even when a chat message started the turn.
+ * chat whatever started the turn, not before `notBefore` when given, followed
+ * by `files` (absolute paths), each as its own message; `chat: false` keeps it
+ * off the chat even when a chat message started the turn.
  */
 export interface TurnRoute {
   chat: boolean
   notBefore?: number
+  files?: readonly string[]
 }
 
 /** Per-turn facts gathered so far. */

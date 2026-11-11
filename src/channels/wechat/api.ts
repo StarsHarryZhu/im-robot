@@ -8,13 +8,14 @@
  * endpoints, and timeouts follow that release; the per-request `X-WECHAT-UIN`
  * is random there and here.
  * Changes: merged into one module; kept only getupdates, sendmessage,
- * getconfig, sendtyping, get_bot_qrcode, and get_qrcode_status (no media
- * upload, no notifystart/notifystop; media.ts downloads what is received); dropped package.json discovery, the
+ * getuploadurl, getconfig, sendtyping, get_bot_qrcode, and get_qrcode_status
+ * (no notifystart/notifystop; media.ts downloads what is received and
+ * upload.ts puts what is sent on the CDN); dropped package.json discovery, the
  * OpenClaw config (bot agent, route tag), and debug logging; the identity
  * values are constants; errors carry the endpoint and status only, never a
  * body or token; base URLs from the server are accepted only on Tencent hosts.
  *
- * The stale-session retry in {@link sendTextMessage} follows
+ * The stale-session retry in {@link sendItemMessage} follows
  * `dsh-weixin-ilink` 0.10.3, `src/outbound.js` (`isStaleSession`,
  * `sendWithStaleRetry`) (MIT License, Copyright (c) 2026 dsh-weixin
  * contributors; full text in THIRD_PARTY_NOTICES.md): after a quiet period
@@ -44,7 +45,7 @@ const ILINK_APP_ID = 'bot'
 const PROTOCOL_VERSION = '2.4.10'
 
 /** Self-declared caller identity, UA style; observability only on the server. */
-const BOT_AGENT = 'im-robot/0.2.3'
+const BOT_AGENT = 'im-robot/0.3.0'
 
 /** `bot_type` for the QR endpoints, as openclaw-weixin sends it. */
 export const BOT_TYPE = '3'
@@ -75,6 +76,8 @@ export interface CdnMedia {
   encrypt_query_param?: string
   aes_key?: string
   full_url?: string
+  /** 1 on what the bot sends, as the reference sends it. */
+  encrypt_type?: number
 }
 
 /** A quoted message. */
@@ -84,17 +87,19 @@ export interface RefMessage {
   message_item?: MessageItem
 }
 
-/** One entry of a message's item list (only the fields read here). */
+/** One entry of a message's item list (only the fields read or sent here). */
 export interface MessageItem {
   type?: number
   ref_msg?: RefMessage
   text_item?: { text?: string }
-  /** `aeskey` is the raw key as hex, which goes before `media.aes_key`. */
-  image_item?: { media?: CdnMedia; aeskey?: string }
+  /** `aeskey` is the raw key as hex, which goes before `media.aes_key`; `mid_size` is the encrypted size of what is sent. */
+  image_item?: { media?: CdnMedia; aeskey?: string; mid_size?: number }
   /** `text` is iLink's transcript. */
   voice_item?: { media?: CdnMedia; text?: string; playtime?: number }
-  file_item?: { media?: CdnMedia; file_name?: string }
-  video_item?: { media?: CdnMedia }
+  /** `len` is the plain size of what is sent, as text. */
+  file_item?: { media?: CdnMedia; file_name?: string; len?: string }
+  /** `video_size` is the encrypted size of what is sent. */
+  video_item?: { media?: CdnMedia; video_size?: number }
 }
 
 /** One message as getupdates returns it (only the fields read here). */
@@ -300,13 +305,13 @@ export function isStaleSession(response: SendMessageResponse): boolean {
 }
 
 /**
- * Send one text message; throws on an HTTP error or a non-zero `ret` or
- * `errcode`, a {@link ChatRefusedError} for `-2`. When the context token has
- * gone stale, the message goes once more without it. The error names the
+ * Send one message of one item; throws on an HTTP error or a non-zero `ret`
+ * or `errcode`, a {@link ChatRefusedError} for `-2`. When the context token
+ * has gone stale, the message goes once more without it. The error names the
  * code and the server's message, never the token.
  */
-export async function sendTextMessage(
-  message: { to: string; text: string; contextToken?: string; clientId: string },
+export async function sendItemMessage(
+  message: { to: string; item: MessageItem; contextToken?: string; clientId: string },
   options: CallOptions,
 ): Promise<void> {
   const attempt = (contextToken: string | undefined, clientId: string): Promise<SendMessageResponse> => post<SendMessageResponse>('ilink/bot/sendmessage', {
@@ -316,7 +321,7 @@ export async function sendTextMessage(
       client_id: clientId,
       message_type: MessageType.BOT,
       message_state: MESSAGE_STATE_FINISH,
-      item_list: [{ type: ItemType.TEXT, text_item: { text: message.text } }],
+      item_list: [message.item],
       ...(contextToken ? { context_token: contextToken } : {}),
     },
   }, options)
@@ -328,6 +333,52 @@ export async function sendTextMessage(
   const said = (response.errmsg ?? '').trim().slice(0, 120)
   const text = `sendmessage ret=${code}${said === '' ? '' : ` errmsg=${JSON.stringify(said)}`}`
   throw code === REFUSED_CODE ? new ChatRefusedError(text) : new Error(text)
+}
+
+/** Send one text message, as {@link sendItemMessage} sends any item. */
+export function sendTextMessage(
+  message: { to: string; text: string; contextToken?: string; clientId: string },
+  options: CallOptions,
+): Promise<void> {
+  const { text, ...rest } = message
+  return sendItemMessage({ ...rest, item: { type: ItemType.TEXT, text_item: { text } } }, options)
+}
+
+/** `media_type` of getuploadurl. */
+export const UploadMediaType = { IMAGE: 1, VIDEO: 2, FILE: 3 } as const
+
+/** What getuploadurl is asked: the plain size and MD5, the encrypted size, and the key as hex. */
+export interface UploadUrlRequest {
+  filekey: string
+  media_type: number
+  to_user_id: string
+  rawsize: number
+  rawfilemd5: string
+  filesize: number
+  no_need_thumb: boolean
+  aeskey: string
+}
+
+/** getuploadurl response. */
+export interface UploadUrlResponse {
+  ret?: number
+  errcode?: number
+  errmsg?: string
+  /** What the CDN upload URL is built from. */
+  upload_param?: string
+  /** A full upload URL, when the server gives one. */
+  upload_full_url?: string
+}
+
+/** Ask for a CDN upload slot; throws on an HTTP error or a non-zero `ret` or `errcode`. */
+export async function getUploadUrl(request: UploadUrlRequest, options: CallOptions): Promise<UploadUrlResponse> {
+  const response = await post<UploadUrlResponse>('ilink/bot/getuploadurl', { ...request }, options)
+  const code = response.ret !== undefined && response.ret !== 0 ? response.ret : response.errcode
+  if (code !== undefined && code !== 0) {
+    const said = (response.errmsg ?? '').trim().slice(0, 120)
+    throw new Error(`getuploadurl ret=${code}${said === '' ? '' : ` errmsg=${JSON.stringify(said)}`}`)
+  }
+  return response
 }
 
 /** Fetch the bot config for one user (its typing ticket). */

@@ -16,7 +16,7 @@ function files(folder: string): string[] {
 describe('package identity', () => {
   it('is im-robot 0.2.2, MIT, ESM, for DeepSeek Harness 0.2.1-rc.5 up to 0.3', () => {
     expect(manifest.name).toBe('@starsharryzhu/im-robot')
-    expect(manifest.version).toBe('0.2.3')
+    expect(manifest.version).toBe('0.3.0')
     expect(manifest.license).toBe('MIT')
     expect(manifest.type).toBe('module')
     expect(manifest.engines.dsh).toBe('>=0.2.1-rc.5 <0.3.0-0')
@@ -64,6 +64,7 @@ describe('provenance', () => {
       'src/channels/wechat/typing.ts': 'openclaw-weixin',
       'src/channels/wechat/inbound.ts': 'dsh-weixin-ilink',
       'src/channels/wechat/media.ts': 'openclaw-weixin',
+      'src/channels/wechat/upload.ts': 'openclaw-weixin',
       'src/reply.ts': 'openclaw-weixin',
       'src/turns.ts': 'dsh-weixin-ilink',
       'src/service.ts': 'dsh-weixin-ilink',

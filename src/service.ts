@@ -29,7 +29,11 @@
  *    a turn whose whole text is the configured `silentReply` sends nothing in
  *    any of these cases, not even the no-reply notice;
  * 5. `send` reaches the account at any time, through the outbox; a turn running
- *    meanwhile sends no reply of its own.
+ *    meanwhile sends no reply of its own;
+ * 6. files given to `send`, or to `route` with the chat chosen, follow the text
+ *    through the outbox, one entry each, read and uploaded when they go: held,
+ *    retried, and waiting for the account's next message like text; a file
+ *    that is gone or cannot go by then is dropped.
  *
  * Bridging a chat account to a DSH session follows the idea of
  * `dsh-weixin-ilink` 0.9.1, `src/agent-bridge.js` (MIT License, Copyright (c)
@@ -42,8 +46,9 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { join } from 'node:path'
-import { ChatRefusedError } from './channels/adapter.ts'
+import { statSync } from 'node:fs'
+import { basename, isAbsolute, join } from 'node:path'
+import { ChatRefusedError, UnsendableFileError } from './channels/adapter.ts'
 import type { ChannelAdapter, ChannelAccount, ChannelLink, InboundMessage } from './channels/adapter.ts'
 import { attachmentParts } from './attach.ts'
 import { splitReply, stripMarkdown } from './reply.ts'
@@ -68,6 +73,34 @@ export const RECONNECT_WAIT_MS = 15_000
 
 /** Latest `notBefore` a caller may ask for: an entry waits at most this long. */
 export const MAX_HOLD_MS = OUTBOX_MAX_AGE_MS
+
+/** Largest file `send` and `route` take: what WeChat's adapter sends at most. */
+export const MAX_SEND_FILE_BYTES = 100 * 1024 * 1024
+
+/**
+ * Check a caller's `files`.
+ * @returns the paths, in order; empty for none.
+ * @throws when it is not an array of absolute paths to regular, non-empty files of at most {@link MAX_SEND_FILE_BYTES}.
+ */
+function filesOf(value: unknown): string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw new TypeError('im-robot: files must be an array of absolute paths')
+  return value.map((path: unknown) => {
+    if (typeof path !== 'string' || !isAbsolute(path)) throw new TypeError('im-robot: files must be absolute paths')
+    let size: number
+    try {
+      const stats = statSync(path)
+      if (!stats.isFile()) throw new RangeError(`im-robot: not a regular file: ${path}`)
+      size = stats.size
+    } catch (error) {
+      if (error instanceof RangeError) throw error
+      throw new RangeError(`im-robot: no file at ${path}`)
+    }
+    if (size === 0) throw new RangeError(`im-robot: the file is empty: ${path}`)
+    if (size > MAX_SEND_FILE_BYTES) throw new RangeError(`im-robot: the file is over 100 MB: ${path}`)
+    return path
+  })
+}
 
 /**
  * Check a caller's `notBefore`.
@@ -340,20 +373,25 @@ export class ImRobot implements ImRobotService {
     return this.status(bindingId)
   }
 
-  send(bindingId: string, text: string, options?: { notBefore?: number }): void {
+  send(bindingId: string, text: string, options?: { notBefore?: number; files?: readonly string[] }): void {
     const runtime = this.usable(bindingId)
     const notBefore = notBeforeOf(options?.notBefore)
+    const files = filesOf(options?.files)
     const segments = this.segmentsOf(runtime, typeof text === 'string' ? text : '')
-    if (segments.length === 0) throw new TypeError('im-robot: send needs some text')
+    if (segments.length === 0 && files.length === 0) throw new TypeError('im-robot: send needs some text or a file')
     this.turns.markSent(runtime.stored.sessionId!)
-    this.enqueueReply(runtime, segments, notBefore)
+    this.enqueueReply(runtime, segments, notBefore, files)
   }
 
   route(bindingId: string, route: TurnRoute): boolean {
     if (typeof route !== 'object' || route === null || typeof route.chat !== 'boolean') throw new TypeError('im-robot: route needs { chat: boolean }')
     const runtime = this.usable(bindingId)
     const notBefore = notBeforeOf(route.notBefore)
-    return this.turns.setRoute(runtime.stored.sessionId!, { chat: route.chat, ...(notBefore === undefined ? {} : { notBefore }) })
+    const files = filesOf(route.files)
+    if (!route.chat && files.length > 0) throw new TypeError('im-robot: files go only with chat: true')
+    return this.turns.setRoute(runtime.stored.sessionId!, {
+      chat: route.chat, ...(notBefore === undefined ? {} : { notBefore }), ...(files.length === 0 ? {} : { files }),
+    })
   }
 
   /** A binding that can send now: logged in, bound, and switched on; else a plain-Chinese error. */
@@ -778,26 +816,31 @@ export class ImRobot implements ImRobotService {
     const { route } = signal
     // The caller's model said nothing on purpose: no reply, no routed text, no push, and no no-reply notice.
     const silent = this.isSilent(signal.text)
+    // Files go whenever the turn was routed to the chat, whatever its text.
+    const files = route?.chat === true ? [...route.files ?? []] : []
     for (const bindingId of answered) {
       const runtime = this.bindings.get(bindingId)
       if (runtime === undefined) continue
       this.settle(runtime, signal.bindings.filter(id => id === bindingId).length)
       if (runtime.stored.sessionId !== signal.sessionId) continue
       this.setLastInput(runtime, true)
-      // The caller answered through `send`, or kept this turn's text off the chat.
-      if (signal.sent || route?.chat === false || silent) continue
-      const segments = this.segmentsOf(runtime, signal.text)
-      this.enqueueReply(runtime, segments.length > 0 ? segments : [NOTICE.noReply], route?.notBefore)
+      // Kept off the chat on purpose.
+      if (route?.chat === false) continue
+      // The caller answered through `send`, or said nothing on purpose: no text of this turn's own.
+      const segments = signal.sent || silent ? [] : this.segmentsOf(runtime, signal.text)
+      const notice = segments.length === 0 && files.length === 0 && !signal.sent && !silent ? [NOTICE.noReply] : []
+      this.enqueueReply(runtime, [...segments, ...notice], route?.notBefore, files)
     }
-    if (answered.length > 0 || route?.chat === false || silent) return
+    if (answered.length > 0 || route?.chat === false) return
     if (route?.chat === true) {
       for (const runtime of this.runtimesOf(signal.sessionId)) {
         if (!this.isOn(runtime)) continue
         // Routed on purpose: a turn that then wrote nothing sends nothing, not the no-reply notice.
-        this.enqueueReply(runtime, this.segmentsOf(runtime, signal.text), route.notBefore)
+        this.enqueueReply(runtime, silent ? [] : this.segmentsOf(runtime, signal.text), route.notBefore, files)
       }
       return
     }
+    if (silent) return
     if (!(signal.followUp || signal.reminder) || this.options.autoPush === false) return
     for (const runtime of this.runtimesOf(signal.sessionId)) {
       if (!runtime.stored.lastInputFromChat) continue
@@ -825,15 +868,19 @@ export class ImRobot implements ImRobotService {
     }
   }
 
-  /** Write a reply's segments to the outbox, not to go before `notBefore` when given, then send what the outbox holds. */
-  private enqueueReply(runtime: Runtime, segments: string[], notBefore?: number): void {
-    if (segments.length === 0) return
+  /**
+   * Write a reply's segments, then its files, to the outbox, not to go before
+   * `notBefore` when given, then send what the outbox holds.
+   */
+  private enqueueReply(runtime: Runtime, segments: string[], notBefore?: number, files: readonly string[] = []): void {
+    if (segments.length === 0 && files.length === 0) return
     const context = this.adapterOf(runtime.stored.channel).replyContext(this.linkOf(runtime))
     const createdAt = Date.now()
     const deferred = notBefore !== undefined && notBefore > createdAt ? { notBefore } : {}
-    const entries: OutboxEntry[] = segments.map(text => ({
-      id: randomUUID(), text, ...(context === undefined ? {} : { context }), createdAt, ...deferred, failures: 0,
-    }))
+    const entry = (text: string, file?: string): OutboxEntry => ({
+      id: randomUUID(), text, ...(file === undefined ? {} : { file }), ...(context === undefined ? {} : { context }), createdAt, ...deferred, failures: 0,
+    })
+    const entries = [...segments.map(text => entry(text)), ...files.map(file => entry('', file))]
     runtime.stored = { ...runtime.stored, outbox: [...runtime.stored.outbox, ...entries] }
     this.writeQuietly(runtime)
     // While the account's next message is awaited, a try now would only be refused again.
@@ -870,10 +917,18 @@ export class ImRobot implements ImRobotService {
             return
           }
           try {
-            await adapter.send(link, entry.text, entry.context)
+            if (entry.file === undefined) await adapter.send(link, entry.text, entry.context)
+            else if (adapter.sendFile === undefined) throw new UnsendableFileError(`${adapter.channel} cannot send files`)
+            else await adapter.sendFile(link, entry.file, entry.context)
           } catch (error) {
             if (!live()) return
             this.noteFailure(runtime, error)
+            if (error instanceof UnsendableFileError) {
+              // Trying again cannot help this file; the entries behind it go on.
+              this.host.logger.warn(`${label} dropped a file it cannot send (${basename(entry.file ?? '')}): ${error.message}`)
+              this.replaceOutbox(runtime, runtime.stored.outbox.filter(item => item.id !== entry.id))
+              continue
+            }
             if (entry.context === undefined && adapter.replyContext(link) === undefined) {
               // Nothing wrong with this entry: the account has not written yet, and its first message brings a context.
               this.host.logger.warn(`${label} has no reply context yet, so the outbox waits for the account's first message: ${String(error)}`)

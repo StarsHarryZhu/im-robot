@@ -56,6 +56,13 @@ export type InboundMessage = {
 export declare class ChatRefusedError extends Error {
     readonly name = "ChatRefusedError";
 }
+/**
+ * A file cannot be sent as it is now: it is gone, not a regular file, empty,
+ * or over the platform's limit. Retrying cannot help, so the service drops it.
+ */
+export declare class UnsendableFileError extends Error {
+    readonly name = "UnsendableFileError";
+}
 /** What a quick, read-only check of an account found. */
 export interface ChannelProbe {
     /** Whether the platform's server answered. */
@@ -113,6 +120,14 @@ export interface ChannelAdapter {
      * message can let it through.
      */
     send(link: ChannelLink, text: string, context?: string): Promise<void>;
+    /**
+     * Send one file to the person who logged in, as the platform shows its kind
+     * (an image, a video, or a file to open), in `context` when given, else the
+     * latest. Throws {@link ChatRefusedError} like {@link send}, and
+     * {@link UnsendableFileError} for a file that cannot go as it is. Absent on a
+     * platform that cannot send files.
+     */
+    sendFile?(link: ChannelLink, path: string, context?: string): Promise<void>;
     /**
      * Ask the server one lightweight question with the account's secret,
      * changing nothing, to tell whether it answers and accepts the secret.

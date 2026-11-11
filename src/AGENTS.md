@@ -16,7 +16,8 @@ The plugin source, compiled by `build.js` into `lib/`. The entry provides the `i
 - `lastInboundAt` / `lastOutboundAt` are persisted with the binding but left out of the change check, so they never emit `im-robot/status` on their own.
 - Follow-up sources (`subagent-settled`, `agent-message`, `team-message`, `host-note`) and reminders are answered on the chat only while `autoPush` is on and `lastInputFromChat` holds, and a turn with no text sends nothing. `send` needs neither; a turn it ran during sends nothing by itself.
 - `route` decides for the running turn and overrides all of that: `chat: true` sends its final text through the outbox whatever started the turn, `chat: false` keeps even the answer to a chat message off the chat (typing still clears). A routed turn with no text sends nothing, not the no-reply notice.
-- A turn whose whole reply, trimmed, is the configured `silentReply` sends nothing in any of these cases: not the reply, not the no-reply notice, not a routed or pushed answer; typing still clears. Empty (the default) sends every reply.
+- `files` (on `send`, or on `route` with `chat: true`) are absolute paths to regular, non-empty files of at most `MAX_SEND_FILE_BYTES` (100 MB), checked when called; they follow the text as one outbox entry each (`file`, empty `text`), held, retried, and waiting for the account's next message like text, read and uploaded again on every try. Routed files go whatever the turn's text, the silent reply included. An entry whose file the adapter cannot send (gone, too large, or a channel without `sendFile`) is dropped at once, logged, and kept as `lastSendFailure`, and the entries behind it go on.
+- A turn whose whole reply, trimmed, is the configured `silentReply` sends nothing in any of these cases: not the reply, not the no-reply notice, not a routed or pushed answer (routed files still go); typing still clears. Empty (the default) sends every reply.
 - `notBefore` (from `send` or `route`, at most 24 hours ahead) holds an outbox entry until then without holding back the entries behind it; its 24-hour age counts from that moment.
 - A message's saved files go into the prompt after its text: images as image parts the host stores and normalizes (within `ctx.attachments.imageLimits`), other files up to `MAX_ATTACHED_FILE_BYTES` by a `ctx.fileUploads.uploadStream` receipt. Both services are read lazily with `ctx.get` and optional, since 0.2.1-rc.5 is untested with them and a missing injection makes a 0.2.2 host reject the plugin. A file that cannot be attached is only named in the text; a prompt refused with attachments (a model without image input) goes again as text alone.
 - The `im-robot/inbound` listeners are awaited before the prompt; a failing listener is logged, never blocks the prompt.
@@ -32,11 +33,11 @@ The plugin source, compiled by `build.js` into `lib/`. The entry provides the `i
 
 - `index.ts` — plugin entry: name, injections, config schema, and `apply`.
 - `types.ts` — the public service contract (with binding options and diagnosis shapes), event typings, and structural host types.
-- `service.ts` — the `imRobot` service: logins, bindings, delivery, steering, commands, replies, follow-ups, `send` and `route` through the outbox, held entries, reminders, connection status, reconnect, diagnose, options.
+- `service.ts` — the `imRobot` service: logins, bindings, delivery, steering, commands, replies, follow-ups, `send` and `route` with their files through the outbox, held entries, reminders, connection status, reconnect, diagnose, options.
 - `attach.ts` — the prompt parts for a message's saved files: inline images and uploaded files, with the names their cards show.
 - `turns.ts` — turn tracking over `session/event`, follow-up sources, each turn's route, and the request-id scheme for bindings.
 - `reply.ts` — Markdown stripping, reply splitting by sentence and clause marks, and `<keep>` blocks.
-- `store.ts` — binding ids, credential names, the data directory under the host's DSH home, the state files with their option defaults, media folder check, and the outbox entry shape.
+- `store.ts` — binding ids, credential names, the data directory under the host's DSH home, the state files with their option defaults, media folder check, and the outbox entry shape (text or a file).
 - `channels` — the adapter seam and the WeChat adapter.
 
 ## 4. Progress
@@ -44,5 +45,6 @@ The plugin source, compiled by `build.js` into `lib/`. The entry provides the `i
 - Done: everything the first version needs, including follow-up pushes and host notes, covered by the specs.
 - Done (2026-11-06, after the user reported proactive messages never arriving): a message to a chat quiet for a day was refused as stale and dropped after its retries; the adapter now sends it again without the old context token. `route` lets the caller decide where each turn's text goes, `notBefore` holds an entry until quiet hours end, and received images and files are attached to the prompt so the conversation view shows them.
 - Done (2026-11-07, after the daily brief missed a chat quiet for 33 hours): what iLink refuses until the account writes again waits for its next message, uncounted, instead of being dropped after its retries; `status` reports `windowClosesAt` so the parent can ask the user to write before it closes.
-- Open: the stale-session retry, the wait for the next message, and the attachments are checked against fakes only, not against the real iLink server or host; which code iLink answers a day after the last message is not known, so the age rule backs up the `-2` rule.
+- Done (2026-11-10, user request): `send` and `route` take `files`, sent after the text as images, videos, or files to open.
+- Open: the stale-session retry, the wait for the next message, the attachments, and sending files are checked against fakes only, not against the real iLink server or host; which code iLink answers a day after the last message is not known, so the age rule backs up the `-2` rule.
 - Goal later: nothing planned beyond new channels.

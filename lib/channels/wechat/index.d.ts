@@ -37,6 +37,9 @@ export interface WechatOptions {
     /** Timeout and size limit of one media download. */
     mediaTimeoutMs?: number;
     mediaMaxBytes?: number;
+    /** Timeout and size limit of one file sent. */
+    uploadTimeoutMs?: number;
+    sendMaxBytes?: number;
 }
 /** WeChat over iLink. */
 export declare class WechatAdapter implements ChannelAdapter {
@@ -49,12 +52,16 @@ export declare class WechatAdapter implements ChannelAdapter {
     private readonly probeTimeoutMs;
     private readonly cdnBaseUrl;
     private readonly mediaLimits;
+    private readonly uploadLimits;
     private readonly tickets;
     constructor(options?: WechatOptions);
     login(signal: AbortSignal): AsyncGenerator<AdapterLoginState>;
     receive(link: ChannelLink, deliver: (message: InboundMessage) => Promise<void>, signal: AbortSignal): Promise<void>;
     replyContext(link: ChannelLink): string | undefined;
     send(link: ChannelLink, text: string, context?: string): Promise<void>;
+    sendFile(link: ChannelLink, path: string, context?: string): Promise<void>;
+    /** The account's host, secret, and recipient, and the context to send in. */
+    private target;
     /** One getconfig call: it needs the bot token and only reads the account's typing ticket. */
     probe(link: ChannelLink, signal: AbortSignal): Promise<ChannelProbe>;
     startTyping(link: ChannelLink): () => void;

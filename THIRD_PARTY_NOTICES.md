@@ -20,6 +20,7 @@ the files that `dsh-weixin-ilink`'s own NOTICE lists as derived from
   - `src/api/config-cache.ts`, typing calls in `src/messaging/process-message.ts` → `src/channels/wechat/typing.ts`
   - `bodyFromItemList` and `inlineQuoteBody` in `src/messaging/inbound.ts` → `src/channels/wechat/inbound.ts`
   - `src/cdn/pic-decrypt.ts`, `src/cdn/aes-ecb.ts`, `src/cdn/cdn-url.ts`, `src/media/media-download.ts` → `src/channels/wechat/media.ts`
+  - `src/cdn/upload.ts`, `src/cdn/cdn-upload.ts`, `src/cdn/aes-ecb.ts`, `src/cdn/cdn-url.ts`, and the image, video, and file items of `src/messaging/send.ts` → `src/channels/wechat/upload.ts`
   - `src/messaging/markdown-filter.ts` → `src/reply.ts`
 
 ```
@@ -62,6 +63,10 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   - `normalizeInbound` in `src/transport/ilink.js` → `src/channels/wechat/inbound.ts` (0.9.1)
   - `isStaleSession` and `sendWithStaleRetry` in `src/outbound.js` → the
     stale-session retry in `src/channels/wechat/api.ts` (0.10.3)
+  - what `uploadMedia`, `mediaTypeFor`, and `buildMediaItem` in
+    `src/media.js` record about uploads measured against a live account (the
+    upload type by extension, the URL built from `upload_param`, `aes_key` as
+    base64 of the key's hex text) → `src/channels/wechat/upload.ts` (0.10.3)
 
 ```
 MIT License

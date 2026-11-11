@@ -46,8 +46,10 @@ export const DEFAULT_BINDING_SETTINGS: Readonly<BindingSettings> = Object.freeze
  */
 export interface OutboxEntry {
   id: string
-  /** One plain-text segment, already stripped and split. */
+  /** One plain-text segment, already stripped and split; empty for a file. */
   text: string
+  /** A file to send instead of text: its absolute path, read when it is sent. */
+  file?: string
   /** The reply context when the reply was made (WeChat: its `context_token`). */
   context?: string
   /** When the reply was made, epoch milliseconds. */
@@ -125,6 +127,7 @@ function isOutboxEntry(value: unknown): value is OutboxEntry {
   if (typeof value !== 'object' || value === null) return false
   const entry = value as Record<string, unknown>
   return typeof entry.id === 'string' && typeof entry.text === 'string'
+    && (entry.file === undefined || typeof entry.file === 'string')
     && (entry.context === undefined || typeof entry.context === 'string')
     && typeof entry.createdAt === 'number' && Number.isInteger(entry.failures) && (entry.failures as number) >= 0
     && (entry.notBefore === undefined || (typeof entry.notBefore === 'number' && Number.isFinite(entry.notBefore)))

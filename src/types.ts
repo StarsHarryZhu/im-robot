@@ -105,10 +105,15 @@ export interface ImRobotService {
    * like a reply, split by the binding's limit, with any `<keep>` block whole.
    * A turn of the bound session that is running when this is called sends no
    * automatic reply of its own: the caller has answered. With `notBefore`, it
-   * waits in the outbox until then (at most 24 hours ahead).
-   * @throws when the binding is not logged in, not bound, switched off, or the text is empty.
+   * waits in the outbox until then (at most 24 hours ahead). `files` are
+   * absolute paths sent after the text, each as its own message, as WeChat
+   * shows its kind (an image, a video, or a file to open); the text may then be
+   * empty. A file is read when it goes, and dropped if it is gone by then.
+   * @throws when the binding is not logged in, not bound, or switched off, when
+   * there is neither text nor a file, or when a file is not an absolute path to
+   * a regular, non-empty file of at most 100 MB.
    */
-  send(bindingId: string, text: string, options?: { notBefore?: number }): void
+  send(bindingId: string, text: string, options?: { notBefore?: number; files?: readonly string[] }): void
   /**
    * Route the final text of the bound session's running turn: `chat: true`
    * sends it to the account whatever started the turn (a reply to a chat
@@ -116,11 +121,13 @@ export interface ImRobotService {
    * when given; `chat: false` keeps it off the chat, even as the answer to a
    * chat message. A later call in the same turn replaces an earlier one.
    * Routed text goes through the outbox like a reply; an empty one sends
-   * nothing.
+   * nothing. With `chat: true`, `files` follow the text as {@link send} sends
+   * them, even when the text is empty or the silent reply.
    * @returns false when no turn of the session is running, so nothing was routed.
-   * @throws like {@link send}, and when `notBefore` lies more than 24 hours ahead.
+   * @throws like {@link send}, when `notBefore` lies more than 24 hours ahead,
+   * and when `files` come with `chat: false`.
    */
-  route(bindingId: string, route: { chat: boolean; notBefore?: number }): boolean
+  route(bindingId: string, route: { chat: boolean; notBefore?: number; files?: readonly string[] }): boolean
   /** Change runtime options. */
   setOptions(options: ImRobotOptions): void
   /** Change one logged-in binding's options, persist them, and return its new status. */
